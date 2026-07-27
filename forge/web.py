@@ -242,7 +242,13 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(port: int = 8765, learner: str | None = None):
     select_profile(learner)
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError as e:
+        raise SystemExit(
+            f"[Forge] port {port} is already in use — is another Forge running? "
+            f"Try `forge web --port {port + 1}` or stop the other process. ({e.strerror})"
+        ) from None
     who = os.environ.get("FORGE_LEARNER")
     profile = f", learner: {who}" if who else ""
     print(f"[Forge] dashboard at http://127.0.0.1:{port}  (model: {_model()}{profile})")
