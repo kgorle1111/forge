@@ -138,6 +138,9 @@ class Handler(BaseHTTPRequestHandler):
             concept = _query_param(self.path, "concept")[:200]
             detail = Memory().card_detail(topic, concept)
             self._send(detail or {"error": "not found"}, code=200 if detail else 404)
+        elif self.path == "/api/setup":
+            from .wizard import setup_state
+            self._send(setup_state(Memory()))
         elif self.path == "/api/debt":
             self._send(Memory().review_debt())
         elif self.path == "/api/progress":
@@ -210,6 +213,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(Memory().suspend_card(topic, concept))
             except ValueError as e:
                 self._send({"error": str(e)}, code=404)
+        elif self.path == "/api/setup":
+            from .config import save
+            from .wizard import setup_state
+            engine = str(body.get("engine", "")).strip()[:20]
+            model = str(body.get("model") or "").strip()[:200] or None
+            if engine == "anthropic":
+                # keys never travel over HTTP, so this engine can't be set here
+                return self._send({"error": "set ANTHROPIC_API_KEY and rerun "
+                                   "forge init — keys are never sent over HTTP"},
+                                  code=400)
+            if engine not in ("ollama", "stub"):
+                return self._send(
+                    {"error": "engine must be ollama or stub — for the "
+                     "Anthropic API run `forge init` in a terminal"}, code=400)
+            save({"engine": engine, "model": model})
+            self._send(setup_state(Memory()))
         elif self.path == "/api/learner":
             name = str(body.get("learner", "")).strip()
             try:

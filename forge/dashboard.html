@@ -259,6 +259,30 @@
     min-width:160px; flex:0 1 190px; padding:8px 10px; border-radius:6px;
     background:var(--bg0); color:var(--fg); border:1px solid var(--line2);
   }
+  /* ── first-run onboarding ── */
+  #onboard {
+    position:fixed; inset:0; z-index:6; display:flex; align-items:center;
+    justify-content:center; background:rgba(4,5,8,.72); backdrop-filter:blur(3px);
+  }
+  #onboard[hidden] { display:none; }
+  .onboard-card {
+    width:min(680px, 94vw); border:1px solid var(--line2); border-radius:10px;
+    background:linear-gradient(180deg,#141924,#0c0e13); padding:22px 24px;
+    box-shadow:0 24px 70px rgba(0,0,0,.6);
+  }
+  .onboard-card h2 { margin:0 0 4px; font:600 14px var(--sans); letter-spacing:.18em; text-transform:uppercase; color:var(--plat); }
+  .onboard-card > p { margin:0 0 14px; color:#9aa3b2; font:12.5px/1.5 var(--sans); }
+  .onboard-path { display:flex; gap:14px; align-items:flex-start; padding:12px 0; border-top:1px solid var(--line); }
+  .onboard-path h3 { margin:0 0 4px; color:var(--brass2); font:600 12px var(--sans); letter-spacing:.12em; text-transform:uppercase; }
+  .onboard-path p { margin:0; color:#cfd6e2; font:12.5px/1.55 var(--sans); }
+  .onboard-path code { font:12px var(--mono); color:var(--brass2); background:#090b10; border:1px solid var(--line); border-radius:4px; padding:1px 5px; }
+  .onboard-path .grow { flex:1; min-width:0; }
+  .onboard-path button {
+    flex:0 0 auto; padding:8px 14px; border-radius:6px; cursor:pointer;
+    background:var(--bg0); color:var(--fg); border:1px solid var(--line2);
+    font:600 12px var(--sans); letter-spacing:.06em;
+  }
+  .onboard-path button:hover { border-color:var(--brass); color:var(--brass2); }
   body.compact table { font-size:11.5px; }
   body.compact th, body.compact td { padding:5px 12px; }
 
@@ -284,7 +308,7 @@
     <span class="motto">Mastery is the only exit</span>
   </div>
   <div class="metrics">
-    <div class="metric"><div class="k">Engine</div><div class="v"><small id="model">…</small></div></div>
+    <div class="metric"><div class="k">Engine</div><div class="v"><small id="model">…</small> <small id="engineHealth"></small></div></div>
     <div class="metric"><div class="k">Concepts held</div><div class="v" id="nconcepts">0</div></div>
     <div class="metric due"><div class="k">Due now</div><div class="v" id="ndue">0</div></div>
     <div class="metric"><div class="k">Streak</div><div class="v" id="streak">0<small> d</small></div></div>
@@ -338,6 +362,32 @@ you rebuild it from memory, and nothing below <b>0.8</b> passes the gate.
       </tr></thead><tbody></tbody></table></div></div>
   </section>
 </main>
+</div>
+<div id="onboard" hidden>
+  <div class="onboard-card">
+    <h2>Welcome to the Forge</h2>
+    <p>No engine is configured yet. Pick how lessons get generated — you can change this any time with <code>forge init</code>.</p>
+    <div class="onboard-path">
+      <div class="grow">
+        <h3>Local — Ollama</h3>
+        <p id="onboardOllama">Checking for a local Ollama server…</p>
+      </div>
+      <button id="onboardOllamaBtn">Use Ollama</button>
+    </div>
+    <div class="onboard-path">
+      <div class="grow">
+        <h3>Cloud — Anthropic API</h3>
+        <p>In a terminal: <code>export ANTHROPIC_API_KEY=sk-ant-...</code> then <code>forge init</code>. Keys are never entered here and never sent over HTTP.</p>
+      </div>
+    </div>
+    <div class="onboard-path">
+      <div class="grow">
+        <h3>Demo — offline stub</h3>
+        <p>A deterministic built-in tutor with canned lessons. No model, no network — explore the full loop right now.</p>
+      </div>
+      <button id="onboardStubBtn">Start demo</button>
+    </div>
+  </div>
 </div>
 <aside id="detailDrawer" class="drawer" aria-hidden="true">
   <div class="drawer-head"><h2 id="detailTitle">Concept</h2><button data-close="detailDrawer">Close</button></div>
@@ -815,7 +865,31 @@ document.addEventListener("keydown", e => {
   if (e.key === "Enter" && awaiting) { e.preventDefault(); $("sendBtn").click(); }
 });
 addEventListener("resize", seedBg);
-seedBg(); applySettings(); refresh();
+/* ── first-run onboarding ─────────────────────────────── */
+function applySetup(s) {
+  const h = $("engineHealth");
+  h.textContent = s.healthy ? `${s.engine} ✓` : `${s.engine} ✗`;
+  h.title = s.message || "";
+  h.style.color = s.healthy ? "var(--brass2)" : "#d06a5a";
+  if (!s.first_run) { $("onboard").hidden = true; return; }
+  $("onboardOllama").textContent = (s.engine === "ollama" && s.healthy)
+    ? "Ollama detected — " + s.message
+    : "Ollama not detected. Install from ollama.com, run `ollama serve`, pull a model, then reload.";
+  $("onboard").hidden = false;
+}
+async function chooseEngine(engine) {
+  const r = await api("/api/setup", { engine });
+  if (r.error) { render("[Forge] " + r.error); return; }
+  applySetup(r);
+  render(`[Forge] engine set to ${r.engine} — ${r.message}`);
+  await refresh();
+}
+$("onboardStubBtn").onclick = () => chooseEngine("stub");
+$("onboardOllamaBtn").onclick = () => chooseEngine("ollama");
+async function initSetup() {
+  try { applySetup(await api("/api/setup")); } catch (e) { /* server too old */ }
+}
+seedBg(); applySettings(); refresh(); initSetup();
 </script>
 </body>
 </html>

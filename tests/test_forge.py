@@ -1222,6 +1222,96 @@ def test_ws_engine_grader_follows_engine_type():
         assert grader.name == "anthropic" and grader.model == "claude-opus-x"
 
 
+# === WS-WIZARD ===
+
+def test_ws_wizard_init_writes_config():
+    from forge import cli
+    cfg = os.path.join(tempfile.mkdtemp(), "config.json")
+    with _engine_env(FORGE_CONFIG=cfg):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.main(["init", "--engine", "stub"])
+        assert stat.S_IMODE(os.stat(cfg).st_mode) == 0o600
+        assert forge_config.load() == {"engine": "stub", "model": None}
+        out = buf.getvalue()
+        assert "engine health: ok" in out and "forge web" in out
+        # ollama with explicit model: written verbatim, health line honest FAIL
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cli.main(["init", "--engine", "ollama", "--model", "x"])
+        assert forge_config.load() == {"engine": "ollama", "model": "x"}
+        assert "FAIL" in buf.getvalue() and "ollama" in buf.getvalue()
+
+
+def test_ws_wizard_non_tty_exits_prescriptively():
+    from forge import cli
+    cfg = os.path.join(tempfile.mkdtemp(), "config.json")
+    saved_stdin = sys.stdin
+    sys.stdin = io.StringIO()  # isatty() is False
+    buf = io.StringIO()
+    try:
+        with _engine_env(FORGE_CONFIG=cfg), contextlib.redirect_stdout(buf):
+            try:
+                cli.main(["init"])
+                raise AssertionError("expected SystemExit(1)")
+            except SystemExit as e:
+                assert e.code == 1
+    finally:
+        sys.stdin = saved_stdin
+    out = buf.getvalue()
+    assert "--engine ollama" in out and "--engine anthropic" in out
+    assert "--engine stub" in out
+    assert not os.path.exists(cfg)
+
+
+def test_ws_wizard_api_setup_contract():
+    from http.server import ThreadingHTTPServer
+
+    from forge import web
+    cfg = os.path.join(tempfile.mkdtemp(), "config.json")
+    os.environ["FORGE_DB"] = os.path.join(tempfile.mkdtemp(), "setup.db")
+    with _engine_env(FORGE_STUB="1", FORGE_CONFIG=cfg):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        bodies = []
+
+        def call(method, path, body=None):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn.request(method, path, json.dumps(body) if body else None)
+            resp = conn.getresponse()
+            raw = resp.read()
+            bodies.append(raw)
+            return resp.status, json.loads(raw)
+
+        try:
+            # GET: full shape; no config + empty db -> first_run
+            code, s = call("GET", "/api/setup")
+            assert code == 200
+            assert set(s) == {"engine", "model", "healthy", "message", "first_run"}
+            assert s["engine"] == "stub" and s["healthy"] is True
+            assert s["first_run"] is True
+            # POST anthropic -> refused: keys never travel over HTTP
+            code, s = call("POST", "/api/setup", {"engine": "anthropic"})
+            assert code == 400
+            assert "never sent over HTTP" in s["error"] and "forge init" in s["error"]
+            assert not os.path.exists(cfg)
+            code, s = call("POST", "/api/setup", {"engine": "bogus"})
+            assert code == 400
+            # POST stub -> config written, first_run flips false
+            code, s = call("POST", "/api/setup", {"engine": "stub"})
+            assert code == 200
+            assert forge_config.load() == {"engine": "stub", "model": None}
+            assert s["first_run"] is False and s["engine"] == "stub"
+            code, s = call("GET", "/api/setup")
+            assert s["first_run"] is False
+            # no key material in any /api/setup response body, ever
+            for raw in bodies:
+                assert b"api_key" not in raw
+        finally:
+            server.shutdown()
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()

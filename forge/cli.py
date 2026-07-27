@@ -29,6 +29,7 @@ from .llm import get_llm
 from .memory import DAY, DEFAULT_DB, Memory, retrievability
 from .profiles import copy_profile, list_profiles, select_profile
 from .sources import SourceError, read_source, source_manifest as build_source_manifest
+from .wizard import cmd_init
 
 
 def _ask(prompt: str) -> str:
@@ -1494,6 +1495,15 @@ def main(argv=None):
     exp.add_argument("--source-citations", action="store_true",
                      help="append source snippets to card backs when available")
     exp.set_defaults(fn=cmd_export)
+    init = sub.add_parser("init", parents=[profile],
+                          help="set up the LLM engine (interactive or --engine)")
+    init.add_argument("--engine", choices=["ollama", "anthropic", "stub"],
+                      help="write config non-interactively")
+    init.add_argument("--model", help="model name for the chosen engine")
+    init.add_argument("--store-key", action="store_true",
+                      help="offer to store the API key in the 0600 config "
+                           "(read via getpass; default keeps it in the env)")
+    init.set_defaults(fn=cmd_init)
     web = sub.add_parser("web", parents=[profile])
     web.add_argument("--port", type=int, default=8765)
     web.set_defaults(fn=cmd_web)
