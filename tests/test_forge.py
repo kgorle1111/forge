@@ -1361,6 +1361,150 @@ def test_ws_qa_corrupt_config_auto_mode_falls_back_to_stub():
         assert llm.healthy()[0] is True
 
 
+# === P4 review-gate fixes ===
+
+def test_p4_grade_refines_under_any_real_engine():
+    # review fix: grade() gated on isinstance(Ollama) — anthropic users got
+    # heuristic-only scores with no feedback; gate is now name != "stub"
+    from forge.agents import grade
+
+    class FakeEngine:
+        name, model = "anthropic", "fake"
+
+        def ask(self, prompt, as_json=False):
+            return '{"score": 0.9, "feedback": "solid recall"}'
+
+    out = grade(FakeEngine(), "q?", ["alpha"], "alpha")
+    assert out["score"] == 0.9 and out["feedback"] == "solid recall"
+    out = grade(Stub(), "q?", ["alpha"], "alpha")
+    assert out["feedback"] == ""  # stub never refines
+
+
+def test_p4_origin_header_csrf_guard():
+    # security F1: a browser page can blind-POST to 127.0.0.1 with a valid
+    # Host header; cross-site Origins must be rejected on GET and POST
+    from http.server import ThreadingHTTPServer
+
+    from forge import web
+    os.environ["FORGE_DB"] = os.path.join(tempfile.mkdtemp(), "csrf.db")
+    with _engine_env(FORGE_STUB="1",
+                     FORGE_CONFIG=os.path.join(tempfile.mkdtemp(), "c.json")):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+
+        def call(method, origin=None, body=None):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            headers = {"Origin": origin} if origin else {}
+            conn.request(method, "/api/setup",
+                         json.dumps(body) if body else None, headers)
+            return conn.getresponse().status
+
+        try:
+            assert call("GET", origin="https://evil.example") == 403
+            assert call("POST", origin="https://evil.example",
+                        body={"engine": "stub"}) == 403
+            assert call("GET", origin=f"http://127.0.0.1:{port}") == 200
+            assert call("GET", origin="null") == 403  # sandboxed-iframe origin
+            assert call("GET") == 200  # same-origin GETs carry no Origin header
+        finally:
+            server.shutdown()
+
+
+def test_p4_setup_post_merges_config_preserves_key():
+    # security F3 / review 3: dashboard engine switch must not clobber a
+    # wizard-stored api_key
+    from http.server import ThreadingHTTPServer
+
+    from forge import web
+    cfg = os.path.join(tempfile.mkdtemp(), "config.json")
+    os.environ["FORGE_DB"] = os.path.join(tempfile.mkdtemp(), "merge.db")
+    with _engine_env(FORGE_STUB="1", FORGE_CONFIG=cfg):
+        forge_config.save({"engine": "anthropic", "model": None,
+                           "api_key_env": "ANTHROPIC_API_KEY",
+                           "api_key": "sk-ant-test-KEEPME"})
+        server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn.request("POST", "/api/setup", json.dumps({"engine": "stub"}))
+            raw = conn.getresponse().read()
+            assert b"KEEPME" not in raw and b"api_key" not in raw
+            saved = forge_config.load()
+            assert saved["engine"] == "stub"
+            assert saved["api_key"] == "sk-ant-test-KEEPME"  # survived the switch
+            assert stat.S_IMODE(os.stat(cfg).st_mode) == 0o600
+        finally:
+            server.shutdown()
+
+
+def test_p4_anthropic_garbage_200_is_prescriptive():
+    # coverage gap 3: a 200 with a non-JSON body (proxy/captive portal) must
+    # raise a prescriptive RuntimeError, not a raw JSONDecodeError
+    import http.server as hs
+    from forge.llm import AnthropicEngine
+
+    class Garbage(hs.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            body = b"<html>hotel wifi login</html>"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    server = hs.ThreadingHTTPServer(("127.0.0.1", 0), Garbage)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    with _engine_env(ANTHROPIC_API_KEY="sk-ant-test-XYZZY",
+                     FORGE_ANTHROPIC_URL=f"http://127.0.0.1:{server.server_address[1]}"):
+        try:
+            AnthropicEngine().ask("hi")
+            raise AssertionError("expected RuntimeError")
+        except RuntimeError as e:
+            msg = str(e)
+            assert "non-JSON" in msg and "network" in msg
+            assert "sk-ant-test-XYZZY" not in msg
+        finally:
+            server.shutdown()
+
+
+def test_p4_store_key_path_writes_key_via_getpass_only():
+    # coverage gap 5: the one path that writes a secret to disk
+    import forge.wizard as wizard
+
+    cfg = os.path.join(tempfile.mkdtemp(), "config.json")
+    printed = []
+    with _engine_env(FORGE_CONFIG=cfg):  # no ANTHROPIC_API_KEY in env
+        real_input, real_getpass = wizard.input if hasattr(wizard, "input") else input, wizard.getpass.getpass
+        try:
+            import builtins
+            builtins_input = builtins.input
+            builtins.input = lambda *a: "y"
+            wizard.getpass.getpass = lambda *a: "sk-ant-test-SECRET"
+
+            class A:
+                store_key, engine, model = True, None, None
+            import contextlib
+            import io
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                wizard._init_anthropic(A())
+            printed.append(buf.getvalue())
+        finally:
+            builtins.input = builtins_input
+            wizard.getpass.getpass = real_getpass
+    with open(cfg, encoding="utf-8") as f:  # read the file directly: an outer FORGE_CONFIG must not redirect this
+        saved = json.load(f)
+    assert saved["engine"] == "anthropic"
+    assert saved["api_key"] == "sk-ant-test-SECRET"
+    assert stat.S_IMODE(os.stat(cfg).st_mode) == 0o600
+    assert "sk-ant-test-SECRET" not in printed[0]  # never echoed
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()
