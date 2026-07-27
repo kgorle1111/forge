@@ -18,9 +18,10 @@ trap cleanup EXIT
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-# perms helper: BSD stat vs GNU stat
+# perms helper: BSD and GNU stat disagree on flags (-f is a *different valid
+# flag* on GNU, so ||-fallback silently compares garbage) — use python
 perms() {
-    stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"
+    python3 -c 'import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode))[2:])' "$1"
 }
 
 # hermetic env: no leakage from the developer's real setup
