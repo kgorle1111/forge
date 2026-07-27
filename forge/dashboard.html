@@ -8,7 +8,7 @@
   :root {
     --bg0:#07080b; --bg1:#0c0e13; --panel:#10131a; --panel2:#131722;
     --line:#232936; --line2:#2e3648;
-    --fg:#e8ebf1; --dim:#79839a; --faint:#4a5468;
+    --fg:#e8ebf1; --dim:#79839a; --faint:#7a85a0; /* faint was #4a5468: 2.4:1 on panel — lifted to 5.0:1 for WCAG AA */
     --plat:#d7dde6; --brass:#c9a35c; --brass2:#e3c68a;
     --good:#57b876; --bad:#b8434a; --warn:#c9a35c; --accent:#7fa6d9;
     --serif:"Didot","Bodoni MT",Georgia,"Times New Roman",serif;
@@ -16,6 +16,14 @@
     --mono:ui-monospace,"SF Mono",Menlo,monospace;
   }
   * { box-sizing:border-box; }
+  :focus-visible { outline:2px solid var(--brass); outline-offset:2px; border-radius:3px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration:.01ms !important; animation-iteration-count:1 !important;
+      transition-duration:.01ms !important;
+    }
+    #bg { display:none; }
+  }
   html,body { height:100%; }
   body {
     margin:0; color:var(--fg); font:14px/1.55 var(--sans);
@@ -208,7 +216,8 @@
     min-width:170px; flex:0 1 210px; padding:7px 10px; font-size:12px;
     border-radius:6px;
   }
-  #statswrap { flex:1; overflow-y:auto; min-height:0; }
+  #statswrap { flex:1; overflow:auto; min-height:0; }
+  .kbd-hint { flex-basis:100%; color:var(--faint); font-size:10px; letter-spacing:.14em; }
   #statswrap::-webkit-scrollbar { width:8px; }
   #statswrap::-webkit-scrollbar-thumb { background:var(--line2); border-radius:4px; }
   table { border-collapse:collapse; width:100%; font-size:12.5px; }
@@ -240,11 +249,12 @@
   #empty b { color:var(--brass2); font-weight:600; }
   .drawer {
     position:fixed; z-index:5; top:0; right:0; width:min(470px, 94vw); height:100vh;
-    transform:translateX(104%); transition:transform .25s ease;
+    visibility:hidden;  /* keeps closed-drawer controls out of the tab order */
+    transform:translateX(104%); transition:transform .25s ease, visibility .25s;
     border-left:1px solid var(--line2); background:linear-gradient(180deg,#141924,#0c0e13);
     box-shadow:-22px 0 60px rgba(0,0,0,.5); display:flex; flex-direction:column;
   }
-  .drawer.open { transform:translateX(0); }
+  .drawer.open { transform:translateX(0); visibility:visible; }
   .drawer-head {
     display:flex; align-items:center; gap:10px; padding:14px 16px;
     border-bottom:1px solid var(--line);
@@ -297,10 +307,23 @@
     .right { grid-template-rows:360px auto 360px; }
     .triage-body { grid-template-columns:1fr; }
   }
+  @media (max-width: 480px) {
+    body { overflow-x:hidden; }
+    header { padding:10px 14px; gap:10px; }
+    main { padding:10px 12px 14px; gap:12px; }
+    .metric { min-width:72px; padding:6px 10px; }
+    #controls { padding:10px 12px; gap:8px; }
+    button { padding:10px 12px; letter-spacing:.08em; }
+    table { min-width:640px; }  /* scrolls inside #statswrap, never the page */
+    th, td { padding:5px 8px; }
+    .onboard-card { padding:14px 14px; max-height:92vh; overflow:auto; }
+    .onboard-path { flex-direction:column; gap:8px; }
+    .drawer { width:100vw; }
+  }
 </style>
 </head>
 <body>
-<canvas id="bg"></canvas>
+<canvas id="bg" aria-hidden="true"></canvas>
 <div class="shell">
 <header>
   <div class="mark">
@@ -313,7 +336,7 @@
     <div class="metric due"><div class="k">Due now</div><div class="v" id="ndue">0</div></div>
     <div class="metric"><div class="k">Streak</div><div class="v" id="streak">0<small> d</small></div></div>
     <button class="head-button" id="settingsBtn">Settings</button>
-    <svg id="gauge" viewBox="0 0 52 52" aria-label="average mastery">
+    <svg id="gauge" viewBox="0 0 52 52" role="img" aria-label="average mastery">
       <circle class="track" cx="26" cy="26" r="21" fill="none" stroke-width="3.5"/>
       <circle class="arc" id="arc" cx="26" cy="26" r="21" stroke-width="3.5"
               stroke-dasharray="131.9" stroke-dashoffset="131.9" transform="rotate(-90 26 26)"/>
@@ -324,13 +347,14 @@
 <main>
   <section class="panel">
     <h2><span class="tick">◆</span> Operations console <span class="rule"></span></h2>
-    <div id="log"><div id="empty">Name the territory and press <b>Learn</b>. The curriculum
+    <div id="log" role="log" aria-live="polite" aria-label="lesson and event log"><div id="empty">Name the territory and press <b>Learn</b>. The curriculum
 is drawn from first principles; each concept is taught once, then taken away —
 you rebuild it from memory, and nothing below <b>0.8</b> passes the gate.
 <b>Review</b> drills whatever the schedule has marked as decaying.</div></div>
-    <div id="think"><i></i><i></i><i></i> DELIBERATING</div>
+    <div id="think" role="status"><i></i><i></i><i></i> DELIBERATING</div>
     <div id="controls">
-      <input id="box" type="text" placeholder="territory to master…" autocomplete="off">
+      <input id="box" type="text" placeholder="territory to master…" autocomplete="off"
+             aria-label="territory to master, or your answer when the Inquisitor asks">
       <input id="sourceFile" type="file" accept=".txt,.md,.markdown,.text,.pdf">
       <button id="sourceBtn" title="Ground the next lesson in a local document">Source</button>
       <span id="sourceName"></span>
@@ -338,11 +362,12 @@ you rebuild it from memory, and nothing below <b>0.8</b> passes the gate.
       <button id="reviewBtn">Review</button>
       <button id="transcriptBtn">Transcript</button>
       <button id="sendBtn" disabled>Answer</button>
+      <span class="kbd-hint">Press / to focus the territory box · Enter sends · Esc closes panels</span>
     </div>
   </section>
   <section class="right">
     <div class="panel"><h2><span class="tick">◆</span> Knowledge atlas <span class="rule"></span></h2>
-      <canvas id="atlas"></canvas></div>
+      <canvas id="atlas" role="img" aria-label="knowledge atlas: mastered topics orbit as a constellation"></canvas></div>
     <div class="panel triage"><h2><span class="tick">◆</span> Retrieval cockpit <span class="rule"></span></h2>
       <div class="triage-body">
         <section class="triage-col"><h3>Due Queue</h3><div id="queueList" class="mini-list"></div></section>
@@ -351,21 +376,21 @@ you rebuild it from memory, and nothing below <b>0.8</b> passes the gate.
       </div>
     </div>
     <div class="panel"><h2><span class="tick">◆</span> Retention ledger <span class="rule"></span>
-        <span class="ledger-tools"><input id="filter" type="text" placeholder="filter topics…">
+        <span class="ledger-tools"><input id="filter" type="text" placeholder="filter topics…" aria-label="filter ledger topics">
         <span class="fc-label">next 14d</span><span id="forecast"></span></span></h2>
       <div id="statswrap"><table id="stats"><thead><tr>
-        <th data-sort="topic">Topic</th><th data-sort="concept">Concept</th>
-        <th data-sort="risk">Risk</th><th data-sort="recall">Recall</th>
-        <th data-sort="ease">Ease</th><th data-sort="interval_days">Interval</th>
-        <th data-sort="due_in_days">Due</th><th data-sort="reps">Reps</th>
-        <th data-sort="lapses">Lapses</th><th>Command</th>
+        <th scope="col" tabindex="0" data-sort="topic">Topic</th><th scope="col" tabindex="0" data-sort="concept">Concept</th>
+        <th scope="col" tabindex="0" data-sort="risk">Risk</th><th scope="col" tabindex="0" data-sort="recall">Recall</th>
+        <th scope="col" tabindex="0" data-sort="ease">Ease</th><th scope="col" tabindex="0" data-sort="interval_days">Interval</th>
+        <th scope="col" tabindex="0" data-sort="due_in_days">Due</th><th scope="col" tabindex="0" data-sort="reps">Reps</th>
+        <th scope="col" tabindex="0" data-sort="lapses">Lapses</th><th scope="col">Command</th>
       </tr></thead><tbody></tbody></table></div></div>
   </section>
 </main>
 </div>
-<div id="onboard" hidden>
+<div id="onboard" hidden role="dialog" aria-modal="true" aria-labelledby="onboardTitle">
   <div class="onboard-card">
-    <h2>Welcome to the Forge</h2>
+    <h2 id="onboardTitle">Welcome to the Forge</h2>
     <p>No engine is configured yet. Pick how lessons get generated — you can change this any time with <code>forge init</code>.</p>
     <div class="onboard-path">
       <div class="grow">
@@ -387,14 +412,20 @@ you rebuild it from memory, and nothing below <b>0.8</b> passes the gate.
       </div>
       <button id="onboardStubBtn">Start demo</button>
     </div>
+    <div class="onboard-path">
+      <div class="grow">
+        <p>Not ready? The Forge waits. Reopen setup any time with <code>forge init</code> or by reloading.</p>
+      </div>
+      <button id="onboardLaterBtn" aria-label="Dismiss setup for now">Demo later</button>
+    </div>
   </div>
 </div>
-<aside id="detailDrawer" class="drawer" aria-hidden="true">
-  <div class="drawer-head"><h2 id="detailTitle">Concept</h2><button data-close="detailDrawer">Close</button></div>
+<aside id="detailDrawer" class="drawer" role="dialog" aria-labelledby="detailTitle" aria-hidden="true">
+  <div class="drawer-head"><h2 id="detailTitle">Concept</h2><button data-close="detailDrawer" aria-label="Close concept detail">Close</button></div>
   <div id="detailBody" class="drawer-body"></div>
 </aside>
-<aside id="settingsDrawer" class="drawer" aria-hidden="true">
-  <div class="drawer-head"><h2>Local Settings</h2><button data-close="settingsDrawer">Close</button></div>
+<aside id="settingsDrawer" class="drawer" role="dialog" aria-labelledby="settingsTitle" aria-hidden="true">
+  <div class="drawer-head"><h2 id="settingsTitle">Local Settings</h2><button data-close="settingsDrawer" aria-label="Close settings">Close</button></div>
   <div class="drawer-body">
     <div class="setting-row"><label for="learnerName">Learner</label><input id="learnerName" type="text" placeholder="name"></div>
     <div class="setting-row"><label for="refreshCadence">Refresh</label><select id="refreshCadence">
@@ -416,6 +447,10 @@ let sourcePayload = null;
 let statRows = [], sortState = { key: "risk", dir: -1 }, sessionTranscript = [];
 let settings = Object.assign({ refresh: "30000", compact: false, motion: true },
   JSON.parse(localStorage.getItem("forgeSettings") || "{}"));
+// respect OS reduced-motion unless the learner explicitly saved a preference
+if (!localStorage.getItem("forgeSettings") &&
+    matchMedia("(prefers-reduced-motion: reduce)").matches) settings.motion = false;
+let onboardDismissed = false;
 
 /* ── constellation background ─────────────────────────── */
 const bg = $("bg"), bctx = bg.getContext("2d");
@@ -553,10 +588,12 @@ async function api(path, body) {
 }
 function esc(s) { const d = document.createElement("i"); d.textContent = s; return d.innerHTML; }
 async function refresh() {
-  const [s, graph, fc, rows, due, weak, progress] = await Promise.all([
+  const [s, graph, fc, rows, due, weak, progress, setup] = await Promise.all([
     api("/api/state"), api("/api/graphdata"), api("/api/forecast"),
-    api("/api/stats"), api("/api/due"), api("/api/weak"), api("/api/progress")
+    api("/api/stats"), api("/api/due"), api("/api/weak"), api("/api/progress"),
+    api("/api/setup").catch(() => null)  // engine chip rides the existing tick
   ]);
+  if (setup && !setup.error) setEngineChip(setup);
   $("model").textContent = s.learner && s.learner !== "default" ? `${s.model}/${s.learner}` : s.model;
   countTo($("ndue"), s.due); countTo($("nconcepts"), s.concepts);
   $("streak").innerHTML = s.streak + "<small> d</small>";
@@ -600,6 +637,12 @@ function renderLedger() {
       </td>`;
     tb.appendChild(tr);
   }
+  if (!rows.length) {
+    const msg = statRows.length
+      ? "No territory matches that filter."
+      : "The ledger is blank. Master a first concept and it takes its place here.";
+    tb.innerHTML = `<tr><td colspan="10" style="color:var(--dim)">${msg}</td></tr>`;
+  }
 }
 function compareRows(a, b, key) {
   const av = a[key], bv = b[key];
@@ -608,7 +651,12 @@ function compareRows(a, b, key) {
 }
 function renderTriage(id, rows, kind) {
   const el = $(id);
-  if (!rows.length) { el.innerHTML = `<div class="mini-item"><div class="meta">clear</div></div>`; return; }
+  if (!rows.length) {
+    el.innerHTML = `<div class="mini-item"><div class="meta">${kind === "due"
+      ? "Nothing due. The schedule holds."
+      : "No weak concepts — nothing sits below the gate."}</div></div>`;
+    return;
+  }
   el.innerHTML = rows.slice(0, 5).map(r => {
     const hot = (r.risk ?? 0) >= .6 ? "hot" : (r.risk ?? 0) >= .35 ? "warm" : "";
     const due = r.due_in_days <= 0 ? "now" : `${r.due_in_days.toFixed(1)}d`;
@@ -624,7 +672,7 @@ function renderTriage(id, rows, kind) {
 }
 function renderProgress(rows) {
   const el = $("progressList");
-  if (!rows.length) { el.innerHTML = `<div class="mini-item"><div class="meta">none active</div></div>`; return; }
+  if (!rows.length) { el.innerHTML = `<div class="mini-item"><div class="meta">No campaign in progress — name a territory and press Learn.</div></div>`; return; }
   el.innerHTML = rows.slice(0, 5).map(r => `<div class="mini-item warm">
     <div class="title">${esc(r.topic)}</div>
     <div class="meta">${r.concept_idx + 1}/${r.total} · ${esc(r.next_concept || "next concept")}</div>
@@ -834,12 +882,20 @@ $("sendBtn").onclick = async () => {
   await api("/api/answer", { text });
 };
 $("filter").addEventListener("input", renderLedger);
-$("stats").querySelector("thead").addEventListener("click", e => {
-  const th = e.target.closest("th[data-sort]");
-  if (!th) return;
+function sortBy(th) {
   const key = th.dataset.sort;
   sortState = { key, dir: sortState.key === key ? -sortState.dir : (key === "due_in_days" ? 1 : -1) };
+  for (const h of $("stats").querySelectorAll("th[data-sort]"))
+    h.setAttribute("aria-sort", h === th ? (sortState.dir === 1 ? "ascending" : "descending") : "none");
   renderLedger();
+}
+$("stats").querySelector("thead").addEventListener("click", e => {
+  const th = e.target.closest("th[data-sort]");
+  if (th) sortBy(th);
+});
+$("stats").querySelector("thead").addEventListener("keydown", e => {
+  const th = e.target.closest("th[data-sort]");
+  if (th && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); sortBy(th); }
 });
 document.addEventListener("click", e => {
   const close = e.target.closest("[data-close]");
@@ -868,7 +924,13 @@ box.addEventListener("keydown", e => {
 });
 document.addEventListener("keydown", e => {
   const mod = e.metaKey || e.ctrlKey;
-  if (e.key === "Escape") { closeDrawer("detailDrawer"); closeDrawer("settingsDrawer"); return; }
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "");
+  if (e.key === "Escape") {
+    // the onboarding overlay only ever leaves via its explicit "Demo later" path
+    if (!$("onboard").hidden) { $("onboardLaterBtn").click(); return; }
+    closeDrawer("detailDrawer"); closeDrawer("settingsDrawer"); return;
+  }
+  if (e.key === "/" && !mod && !typing) { e.preventDefault(); box.focus(); return; }
   if (!mod) return;
   if (e.key.toLowerCase() === "l") { e.preventDefault(); startLearn(box.value.trim()); }
   if (e.key.toLowerCase() === "r") { e.preventDefault(); startReview(); }
@@ -878,12 +940,16 @@ document.addEventListener("keydown", e => {
 });
 addEventListener("resize", seedBg);
 /* ── first-run onboarding ─────────────────────────────── */
-function applySetup(s) {
+function setEngineChip(s) {
   const h = $("engineHealth");
   h.textContent = s.healthy ? `${s.engine} ✓` : `${s.engine} ✗`;
   h.title = s.message || "";
+  h.setAttribute("aria-label", `engine ${s.engine} ${s.healthy ? "healthy" : "unreachable"}`);
   h.style.color = s.healthy ? "var(--brass2)" : "#d06a5a";
-  if (!s.first_run) { $("onboard").hidden = true; return; }
+}
+function applySetup(s) {
+  setEngineChip(s);
+  if (!s.first_run || onboardDismissed) { $("onboard").hidden = true; return; }
   $("onboardOllama").textContent = (s.engine === "ollama" && s.healthy)
     ? "Ollama detected — " + s.message
     : "Ollama not detected. Install from ollama.com, run `ollama serve`, pull a model, then reload.";
@@ -898,6 +964,10 @@ async function chooseEngine(engine) {
 }
 $("onboardStubBtn").onclick = () => chooseEngine("stub");
 $("onboardOllamaBtn").onclick = () => chooseEngine("ollama");
+$("onboardLaterBtn").onclick = () => {
+  onboardDismissed = true; $("onboard").hidden = true;
+  render("[Forge] no engine chosen yet — pick one later with `forge init` or reload this page.");
+};
 async function initSetup() {
   try { applySetup(await api("/api/setup")); } catch (e) { /* server too old */ }
 }

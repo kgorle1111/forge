@@ -1911,6 +1911,158 @@ def test_ws_models_key_resolution():
         assert _get_grader().model == forge_llm.DEFAULT_ANTHROPIC_MODEL
 
 
+# === WS-TRUST ===
+
+@contextlib.contextmanager
+def _trust_env(**overrides):
+    saved = {k: os.environ.get(k) for k in overrides}
+    for k, v in overrides.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+_TRUST_FAKE_KEY = "sk-ant-trust-planted-key-1234567890"
+
+
+def _trust_setup(tmp):
+    db = os.path.join(tmp, "trust.db")
+    cfg = os.path.join(tmp, "config.json")
+    with open(cfg, "w", encoding="utf-8") as f:
+        json.dump({"engine": "stub", "api_key": _TRUST_FAKE_KEY}, f)
+    os.chmod(cfg, 0o644)
+    Memory(db).record("t", "c", 1.0, lesson="alpha beta gamma")
+    return db, cfg
+
+
+def test_trust_doctor_full():
+    import argparse
+    from forge.cli import cmd_doctor
+    tmp = tempfile.mkdtemp()
+    db, cfg = _trust_setup(tmp)
+    buf = io.StringIO()
+    with _trust_env(FORGE_DB=db, FORGE_CONFIG=cfg,
+                    ANTHROPIC_API_KEY=_TRUST_FAKE_KEY):
+        with contextlib.redirect_stdout(buf):
+            cmd_doctor(argparse.Namespace(fix=False, full=True))
+    out = buf.getvalue()
+    assert "db size:" in out and " bytes" in out
+    assert "rows: cards=1 attempts=1 notes=1" in out
+    assert "disk free:" in out
+    assert "latency:" in out and "stub" in out
+    assert "pdftotext:" in out
+    # 644 config must trigger the loud perms warning naming 0600 remediation
+    assert "config perms: 0644 — WARNING" in out and "chmod 600" in out
+    assert _TRUST_FAKE_KEY not in out
+    # a 0600 config passes cleanly
+    os.chmod(cfg, 0o600)
+    buf2 = io.StringIO()
+    with _trust_env(FORGE_DB=db, FORGE_CONFIG=cfg):
+        with contextlib.redirect_stdout(buf2):
+            cmd_doctor(argparse.Namespace(fix=False, full=True))
+    assert "config perms: 0600 ok" in buf2.getvalue()
+    # plain doctor unchanged: no --full lines
+    buf3 = io.StringIO()
+    with _trust_env(FORGE_DB=db, FORGE_CONFIG=cfg):
+        with contextlib.redirect_stdout(buf3):
+            cmd_doctor(argparse.Namespace(fix=False, full=False))
+    assert "db size:" not in buf3.getvalue()
+    assert "latency:" not in buf3.getvalue()
+
+
+def test_trust_bundle_debug():
+    import argparse
+    import zipfile
+    from forge.cli import cmd_bundle_debug
+    tmp = tempfile.mkdtemp()
+    db, cfg = _trust_setup(tmp)
+    path = os.path.join(tmp, "bundle.zip")
+    buf = io.StringIO()
+    with _trust_env(FORGE_DB=db, FORGE_CONFIG=cfg,
+                    ANTHROPIC_API_KEY=_TRUST_FAKE_KEY):
+        with contextlib.redirect_stdout(buf):
+            cmd_bundle_debug(argparse.Namespace(path=path))
+    assert "review the bundle" in buf.getvalue()
+    with zipfile.ZipFile(path) as z:
+        assert sorted(z.namelist()) == [
+            "doctor-full.txt", "schema.txt", "session-tail.txt"]
+        blob = b"".join(z.read(n) for n in z.namelist())
+    # planted key (env + config) must never appear in any bundled byte
+    assert _TRUST_FAKE_KEY.encode() not in blob
+    assert b"schema version:" in blob and b"- cards" in blob
+    # refuses to overwrite an existing bundle, prescriptively
+    try:
+        cmd_bundle_debug(argparse.Namespace(path=path))
+        raise AssertionError("expected ValueError on existing path")
+    except ValueError as e:
+        assert "already exists" in str(e)
+
+
+# === WS-POLISH ===
+
+def test_polish_dashboard_a11y_markup():
+    from html.parser import HTMLParser
+
+    html_path = os.path.join(os.path.dirname(__file__), "..", "forge", "dashboard.html")
+    with open(html_path, encoding="utf-8") as f:
+        src = f.read()
+
+    tags = []
+
+    class P(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            tags.append((tag, dict(attrs)))
+
+    P().feed(src)  # parses without raising = well-formed enough for html.parser
+
+    def find(tag, **want):
+        return [a for t, a in tags if t == tag
+                and all(a.get(k) == v for k, v in want.items())]
+
+    # landmarks
+    assert find("header") and find("main")
+    # live regions: event log + streaming line container, and thinking status
+    log = find("div", id="log")[0]
+    assert log.get("role") == "log" and log.get("aria-live") == "polite"
+    assert find("div", id="think")[0].get("role") == "status"
+    # labelled controls
+    assert find("input", id="box")[0].get("aria-label")
+    assert find("input", id="filter")[0].get("aria-label")
+    assert find("canvas", id="atlas")[0].get("aria-label")
+    assert find("canvas", id="bg")[0].get("aria-hidden") == "true"
+    assert find("svg", id="gauge")[0].get("role") == "img"
+    # settings form labels tied to inputs
+    label_fors = {a.get("for") for t, a in tags if t == "label"}
+    for field in ("learnerName", "refreshCadence", "compactRows", "motionOn"):
+        assert field in label_fors, f"no <label for={field}>"
+    # onboarding overlay is a modal dialog with an explicit dismiss affordance
+    onboard = find("div", id="onboard")[0]
+    assert onboard.get("role") == "dialog" and onboard.get("aria-modal") == "true"
+    assert find("button", id="onboardLaterBtn")
+    # drawers are dialogs; sortable headers keyboard-reachable
+    assert all(a.get("role") == "dialog" for t, a in tags
+               if t == "aside" and "drawer" in (a.get("class") or ""))
+    sort_ths = [a for t, a in tags if t == "th" and a.get("data-sort")]
+    assert sort_ths and all(a.get("tabindex") == "0" for a in sort_ths)
+    assert all(a.get("scope") == "col" for t, a in tags if t == "th")
+    # css guards present
+    assert ":focus-visible" in src
+    assert "prefers-reduced-motion" in src
+    assert "max-width: 480px" in src
+    # engine chip piggybacks the existing refresh tick, no new timer
+    assert "api(\"/api/setup\").catch" in src
+    assert src.count("setInterval") == 2  # poll + refresh cadence only
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()
