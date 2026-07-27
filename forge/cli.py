@@ -12,6 +12,7 @@
 import argparse
 import csv
 import hashlib
+import io
 import json
 import os
 import plistlib
@@ -892,6 +893,7 @@ def cmd_export_checksum(args):
 def cmd_doctor(args):
     m = Memory()
     ok = True
+    full = getattr(args, "full", False)
     try:
         integrity = m.db.execute("PRAGMA integrity_check").fetchone()[0]
     except Exception as e:
@@ -919,6 +921,47 @@ def cmd_doctor(args):
     present = "present" if os.path.exists(cfg_path) else "absent"
     print(f"config: {cfg_path} ({present})")
     print(f"pdftotext: {pdf}")
+    if full:
+        db_bytes = (os.path.getsize(m.path)
+                    if m.path != ":memory:" and os.path.exists(m.path) else 0)
+        print(f"db size: {db_bytes} bytes")
+        import sqlite3
+        counts = []
+        for table in ("cards", "attempts", "notes"):
+            try:
+                n = m.db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            except sqlite3.Error:
+                n, ok = "ERR", False
+            counts.append(f"{table}={n}")
+        print("rows: " + " ".join(counts))
+        vol = os.path.dirname(os.path.abspath(m.path)) if m.path != ":memory:" else "."
+        try:
+            free = shutil.disk_usage(vol).free
+            print(f"disk free: {free} bytes on {vol}")
+        except OSError as e:
+            print(f"disk free: unavailable ({e})")
+        # latency probe: never sends anything the caller didn't already
+        # configure — it reuses the resolved engine's own ask() path
+        try:
+            llm = get_llm()
+            health_ok = llm.healthy()[0]
+            if llm.name == "stub" or health_ok:
+                t0 = time.time()
+                llm.ask("Reply with the single word: ok")
+                print(f"latency: {time.time() - t0:.2f}s ({llm.name})")
+            else:
+                print("latency: — (engine unhealthy)")
+        except RuntimeError:
+            print("latency: — (engine unhealthy)")
+        if os.path.exists(cfg_path):
+            mode = os.stat(cfg_path).st_mode & 0o777
+            if mode == 0o600:
+                print("config perms: 0600 ok")
+            else:
+                print(f"config perms: {mode:04o} — WARNING: config may hold "
+                      f"key material; run: chmod 600 {cfg_path}")
+        else:
+            print("config perms: n/a (no config file)")
     if m.missing_lessons():
         print(f"missing lessons: {len(m.missing_lessons())}")
     if m.duplicate_concepts():
@@ -930,6 +973,38 @@ def cmd_doctor(args):
               f"rebuilt FTS ({result['fts_rows_rebuilt']} row(s))")
     if not ok:
         sys.exit(1)
+
+
+def cmd_bundle_debug(args):
+    """Zip a shareable debug bundle: doctor output, schema, transcript tail.
+    Never includes config.json, the .db file, or anything from the environment."""
+    import contextlib
+    import zipfile
+    if os.path.exists(args.path):
+        raise ValueError(f"{args.path} already exists — pick a new path or "
+                         "delete the old bundle first")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.suppress(SystemExit):
+        cmd_doctor(argparse.Namespace(fix=False, full=True))
+    doctor_txt = buf.getvalue()
+    m = Memory()
+    version = m.db.execute("PRAGMA user_version").fetchone()[0]
+    tables = [r[0] for r in m.db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+    schema_txt = f"schema version: {version}\ntables:\n" + "".join(
+        f"- {t}\n" for t in tables)
+    import sqlite3
+    try:
+        tail = m.transcript(50).strip()
+    except sqlite3.Error:
+        tail = ""
+    session_txt = tail or "none"
+    with zipfile.ZipFile(args.path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("doctor-full.txt", doctor_txt)
+        z.writestr("schema.txt", schema_txt)
+        z.writestr("session-tail.txt", session_txt)
+    print(f"[Forge] wrote {args.path}: doctor-full.txt, schema.txt, session-tail.txt")
+    print("[Forge] review the bundle contents before sharing it with anyone.")
 
 
 def cmd_rename_topic(args):
@@ -1395,7 +1470,13 @@ def main(argv=None):
     doctor = sub.add_parser("doctor", parents=[profile])
     doctor.add_argument("--fix", action="store_true",
                         help="remove orphan rows and rebuild the FTS index")
+    doctor.add_argument("--full", action="store_true",
+                        help="add db size, row counts, disk free, engine "
+                             "latency, and config perms checks")
     doctor.set_defaults(fn=cmd_doctor)
+    bundle = sub.add_parser("bundle-debug", parents=[profile])
+    bundle.add_argument("path", help="output zip path (must not exist)")
+    bundle.set_defaults(fn=cmd_bundle_debug)
     rt = sub.add_parser("rename-topic", parents=[profile])
     rt.add_argument("old")
     rt.add_argument("new")
