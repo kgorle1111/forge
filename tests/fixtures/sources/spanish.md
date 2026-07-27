@@ -1,0 +1,1 @@
+La memoria de recuperación fortalece el aprendizaje. El cerebro consolida conocimiento durante el sueño profundo. Los exámenes espaciados mejoran la retención a largo plazo. Niños y niñas aprenden más rápido con práctica deliberada — según Cañas y Muñoz.
