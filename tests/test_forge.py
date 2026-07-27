@@ -2063,6 +2063,105 @@ def test_polish_dashboard_a11y_markup():
     assert src.count("setInterval") == 2  # poll + refresh cadence only
 
 
+# === B-P3 backlog ===
+
+def test_bp3_mid_stream_death_recovers():
+    from http.server import ThreadingHTTPServer
+
+    from forge import web
+
+    def dying_stream(self, prompt, as_json=False):
+        yield "two "
+        yield "chunks "
+        raise RuntimeError("boom mid-stream")
+
+    os.environ["FORGE_DB"] = os.path.join(tempfile.mkdtemp(), "bp3-web.db")
+    real_stream = Stub.ask_stream
+    Stub.ask_stream = dying_stream  # session resolves get_llm() -> Stub (FORGE_STUB=1)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+
+    def call(method, path, body=None):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request(method, path, json.dumps(body) if body else None)
+        return json.loads(conn.getresponse().read())
+
+    def drive():
+        events, deadline = [], time.time() + 30
+        while time.time() < deadline:
+            for e in call("GET", "/api/events"):
+                events.append(e)
+                if e["type"] == "ask":
+                    call("POST", "/api/answer", {"text": "remember alpha beta gamma"})
+                elif e["type"] == "end":
+                    return events
+            time.sleep(0.02)
+        raise AssertionError("session never ended after mid-stream death")
+
+    try:
+        assert call("POST", "/api/learn", {"topic": "bp3 crash"})["ok"] is True
+        events = drive()
+        err_idx = next(i for i, e in enumerate(events)
+                       if e["type"] == "say" and "[error]" in e["text"])
+        assert "boom mid-stream" in events[err_idx]["text"]
+        end_idx = next(i for i, e in enumerate(events) if e["type"] == "end")
+        assert err_idx < end_idx
+        assert web.SESSION.active is False
+        # session is reusable: a second learn starts (and dies) cleanly too
+        assert call("POST", "/api/learn", {"topic": "bp3 again"})["ok"] is True
+        events2 = drive()
+        assert any(e["type"] == "say" and "[error]" in e["text"] for e in events2)
+        assert web.SESSION.active is False
+    finally:
+        Stub.ask_stream = real_stream
+        server.shutdown()
+
+
+def test_bp3_regenerate_reproducible():
+    from forge import evals
+
+    def snapshot(d):
+        return {p.name: p.read_bytes() for p in sorted(d.glob("*.json"))}
+
+    tmp = tempfile.mkdtemp()
+    real = evals.GOLDEN_DIR
+    evals.GOLDEN_DIR = type(real)(tmp)
+    try:
+        assert evals.regenerate() == len(evals.CORPUS)
+        first = snapshot(evals.GOLDEN_DIR)
+        assert len(first) == len(evals.CORPUS)
+        assert evals.regenerate() == len(evals.CORPUS)
+        second = snapshot(evals.GOLDEN_DIR)
+        assert first == second  # byte-identical file sets across runs
+        ok, results = evals.run_evals(evals.load_golden())
+        assert ok is True and len(results) == len(evals.CORPUS)
+    finally:
+        evals.GOLDEN_DIR = real
+
+
+def test_bp3_emit_chunk_none_byte_identical():
+    def run(emit_chunk):
+        events, mem = [], Memory(":memory:")
+        run_topic("bp3 stream parity", ask=lambda _p: "remember alpha beta gamma",
+                  emit=events.append, llm=Stub(), memory=mem,
+                  emit_chunk=emit_chunk)
+        stats = [(r["topic"], r["concept"], r["reps"], r["interval_days"],
+                  r["n_attempts"], r["avg_score"]) for r in mem.stats()]
+        return events, stats
+
+    plain_events, plain_stats = run(None)
+    chunks: list[str] = []
+    streamed_events, streamed_stats = run(chunks.append)
+    say_plain = [str(e) for e in plain_events]
+    say_streamed = [str(e) for e in streamed_events]
+    assert say_plain == say_streamed  # emitted say sequence identical
+    assert plain_stats == streamed_stats  # final scheduler rows identical
+    assert chunks, "streaming run produced no chunks"
+    joined = "".join(chunks)
+    assert '"concepts"' not in joined and '"questions"' not in joined  # JSON asks never stream
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()
