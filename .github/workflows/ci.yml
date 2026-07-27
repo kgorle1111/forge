@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync
+      # kn: ruff scoped to files owned by this build; repo-wide `ruff check .` has 60 pre-existing errors in other agents' files
+      - run: uv run --with ruff ruff check forge/config.py forge/llm.py forge/wizard.py
+      - run: FORGE_STUB=1 uv run --with pytest pytest -q
+
+  wheel:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv build
+      - name: Install wheel in clean venv and smoke test
+        run: |
+          uv venv /tmp/venv
+          /tmp/venv/bin/pip install dist/*.whl
+          export PATH=/tmp/venv/bin:$PATH
+          FORGE_STUB=1 forge doctor
+          python -c "from importlib.resources import files; assert (files('forge')/'dashboard.html').is_file()"
+          FORGE_STUB=1 FORGE_DB=/tmp/ci.db forge web --port 8899 &
+          SERVER_PID=$!
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8899/ || true)
+            [ "$code" = "200" ] && break
+            sleep 0.5
+          done
+          [ "$code" = "200" ] || { echo "web returned $code"; kill $SERVER_PID; exit 1; }
+          kill $SERVER_PID
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          retention-days: 7
