@@ -157,9 +157,14 @@ def check_record(record: dict, cap: _Capture | None = None) -> dict[str, tuple[b
 
 def judge(llm, record: dict, lessons: list[str]) -> dict:
     """LLM-judge scaffold. Without human calibration labels every metric is
-    the literal "—" — a judge score is never fabricated."""
+    the literal "—" — a judge score is never fabricated. A stub can never
+    judge: its canned output is not a measurement."""
     if not HUMAN_LABELS.exists():
         return {"score": "—", "note": UNCALIBRATED}
+    if getattr(llm, "name", "") == "stub":
+        return {"score": "—",
+                "note": "judge requires a real engine — run with Ollama or "
+                        "an Anthropic key, not FORGE_STUB"}
     try:  # H6 done by a human: labels exist, the judge may run
         raw = llm.ask(JUDGE.format(name=record["topic"], topic=record["topic"],
                                    lesson=lessons[0] if lessons else ""),
@@ -191,10 +196,38 @@ def run_evals(records: list[dict] | None = None) -> tuple[bool, list[dict]]:
         results.append({
             "record": rec.get("_name", rec["topic"]),
             "checks": checks,
-            "judge": judge(Stub(), rec, cap.lessons),
+            "judge": judge(_judge_llm(), rec, cap.lessons),
         })
     ok = all(all(v[0] for v in r["checks"].values()) for r in results)
     return ok, results
+
+
+def _judge_llm():
+    from .llm import get_llm
+    return get_llm()
+
+
+def judge_agreement(judged: list[dict]) -> dict:
+    """Agreement between judge scores and human labels (H6 output).
+
+    Labels file: {"<record name>": {"score": float}, ...}. Returns mean
+    absolute difference and within-0.15 agreement rate over records where
+    both a numeric judge score and a human label exist; "—" otherwise.
+    """
+    if not HUMAN_LABELS.exists():
+        return {"mad": "—", "agree_rate": "—", "n": 0, "note": UNCALIBRATED}
+    with open(HUMAN_LABELS, encoding="utf-8") as f:
+        labels = json.load(f)
+    pairs = [(r["judge"]["score"], labels[r["record"]]["score"])
+             for r in judged
+             if isinstance(r["judge"].get("score"), float) and r["record"] in labels]
+    if not pairs:
+        return {"mad": "—", "agree_rate": "—", "n": 0,
+                "note": "no overlapping numeric judge scores and labels"}
+    diffs = [abs(j - h) for j, h in pairs]
+    return {"mad": round(sum(diffs) / len(diffs), 3),
+            "agree_rate": round(sum(d <= 0.15 for d in diffs) / len(diffs), 3),
+            "n": len(pairs), "note": "judge vs human labels"}
 
 
 def regenerate() -> int:
@@ -211,9 +244,17 @@ def regenerate() -> int:
     return len(CORPUS)
 
 
+def _clean(s) -> str:
+    # terminal-escape spoofing guard: golden fields print raw otherwise
+    return str(s).replace("\x1b", "\\x1b")
+
+
 def cmd_eval(args) -> None:
     if getattr(args, "regenerate", False):
         print(f"[Forge] regenerated {regenerate()} golden record(s) in {GOLDEN_DIR}")
+        print("[Forge] review the diff before trusting a green run — "
+              "evaluating freshly regenerated goldens can baptize a regression:"
+              "\n  git diff --stat evals/golden")
     ok, results = run_evals()
     if getattr(args, "json", False):
         print(json.dumps({"pass": ok, "results": [
@@ -228,13 +269,17 @@ def cmd_eval(args) -> None:
         for r in results:
             cells = [("PASS" if r["checks"][k][0] else "FAIL")
                      for k in ("curriculum", "lesson", "quiz", "grading")]
-            print(f"{r['record']:<30} {cells[0]:<11} {cells[1]:<7} "
-                  f"{cells[2]:<5} {cells[3]:<8} {r['judge']['score']}")
+            print(f"{_clean(r['record']):<30} {cells[0]:<11} {cells[1]:<7} "
+                  f"{cells[2]:<5} {cells[3]:<8} {_clean(r['judge']['score'])}")
             for k, (okc, detail) in r["checks"].items():
                 if not okc:
-                    print(f"  !! {k}: {detail}")
+                    print(f"  !! {k}: {_clean(detail)}")
         note = results[0]["judge"]["note"] if results else UNCALIBRATED
-        print(f"\njudge: {note}")
+        print(f"\njudge: {_clean(note)}")
+        agree = judge_agreement(results)
+        if agree["n"]:
+            print(f"judge agreement vs human labels: mad={agree['mad']} "
+                  f"agree@0.15={agree['agree_rate']} n={agree['n']}")
         print(f"[Forge] eval {'PASS' if ok else 'FAIL'} "
               f"({len(results)} golden record(s))")
     if not ok:

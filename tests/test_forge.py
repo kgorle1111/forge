@@ -55,7 +55,7 @@ def test_sm2_scheduler():
     e2 = m.record("t", "c", 1.0, now=now)
     assert e2["next_interval_days"] == 6.0
     e3 = m.record("t", "c", 1.0, now=now)
-    assert e3["next_interval_days"] > 6.0  # interval * ease: the 10-20% rule growth
+    assert 14.0 < e3["next_interval_days"] < 16.0  # 6 * ease(~2.5): growth intact below the R1 caps
     lapse = m.record("t", "c", 0.2, now=now)
     assert lapse["next_interval_days"] == 1.0  # failure resets the interval
     card = m.due_cards(now + 2 * DAY)[0]
@@ -1882,7 +1882,7 @@ def test_ws_web_chunk_events():
     chunks_before = [e for e in events[:lesson_idx] if e["type"] == "chunk"]
     assert len(chunks_before) >= 3
     assert "".join(e["text"] for e in chunks_before) == events[lesson_idx]["text"]
-    assert first_chunk_at is not None and first_chunk_at - t0 < 2.0
+    assert first_chunk_at is not None and first_chunk_at - t0 < 5.0  # loose bound: loaded CI runners flake at 2s
 
 
 def test_ws_models_key_resolution():

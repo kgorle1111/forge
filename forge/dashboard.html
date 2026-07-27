@@ -752,6 +752,8 @@ async function poll() {
             esc(e.text.replace(/\n> $/, "")) + "</span>", "q");
       setAwaiting(true);
     } else if (e.type === "end") {
+      // defense in depth: never let a stale stream line leak into the next session
+      if (streamNode) { streamNode.remove(); streamNode = null; }
       setAwaiting(false); setThinking(false);
       clearInterval(polling); polling = null;
       $("learnBtn").disabled = $("reviewBtn").disabled = $("sourceBtn").disabled = false;

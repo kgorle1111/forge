@@ -945,7 +945,11 @@ def cmd_doctor(args):
         try:
             llm = get_llm()
             health_ok = llm.healthy()[0]
-            if llm.name == "stub" or health_ok:
+            if llm.name == "anthropic" and not os.environ.get("FORGE_DOCTOR_PROBE"):
+                # a diagnostics command should not silently spend API tokens
+                print("latency: skipped (anthropic — would spend tokens; "
+                      "set FORGE_DOCTOR_PROBE=1 to probe)")
+            elif llm.name == "stub" or health_ok:
                 t0 = time.time()
                 llm.ask("Reply with the single word: ok")
                 print(f"latency: {time.time() - t0:.2f}s ({llm.name})")

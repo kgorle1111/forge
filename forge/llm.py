@@ -78,7 +78,14 @@ class Ollama:
                 line = line.strip()
                 if not line:
                     continue
-                chunk = json.loads(line).get("response", "")
+                obj = json.loads(line)
+                # in-band error frame: a stream that "just ends" here would
+                # store a truncated lesson as canon — fail loudly instead
+                if obj.get("error"):
+                    raise RuntimeError(
+                        f"Ollama failed mid-generation: {obj['error']} — "
+                        "retry, or try a smaller model")
+                chunk = obj.get("response", "")
                 if chunk:  # the final {"done": true} line carries no text
                     yield chunk
 
@@ -169,6 +176,13 @@ class AnthropicEngine:
                     ev = json.loads(line[5:])
                 except json.JSONDecodeError:
                     continue  # e.g. the final "data: [DONE]" sentinel
+                if ev.get("type") == "error":
+                    # in-band SSE error (e.g. overloaded mid-stream): never
+                    # return a truncated lesson as success
+                    etype = ev.get("error", {}).get("type", "unknown")
+                    raise RuntimeError(
+                        f"Anthropic stream failed mid-generation ({etype}) — "
+                        "retry shortly")
                 if (ev.get("type") == "content_block_delta"
                         and ev.get("delta", {}).get("type") == "text_delta"):
                     yield ev["delta"]["text"]

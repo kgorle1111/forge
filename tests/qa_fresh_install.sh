@@ -80,6 +80,8 @@ T1=$(date +%s)
 FORGE_STUB=1 "$FORGE" stats | grep -q "qa topic" \
     || fail "learned topic missing from stats"
 echo "TIMING: $((T1 - T0))s install-to-first-lesson"
+# the roadmap gate is <2 min; a regression past it is a bug, not a log line
+[ $((T1 - T0)) -lt 120 ] || fail "install-to-first-lesson took $((T1 - T0))s (gate: <120s)"
 
 echo "== review exits cleanly =="
 # everything was just mastered -> nothing due; must not hang on stdin
