@@ -19,7 +19,9 @@ def load() -> dict:
     try:
         with open(config_path(), encoding="utf-8") as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError):
+        # unreadable config (missing, perms, is-a-dir) never blocks a command;
+        # doctor reports presence separately
         return {}
 
 
@@ -28,9 +30,13 @@ def save(cfg: dict) -> str:
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    # key material may be in cfg: create 0600 from the first byte and swap in
+    # atomically so no reader ever sees loose perms or a half-written file
+    tmp = f"{path}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
-    os.chmod(path, 0o600)
+    os.replace(tmp, path)
     return path
 
 
@@ -68,7 +74,24 @@ def resolve_engine():
     if api_key(cfg):
         return llm.AnthropicEngine(
             model=os.environ.get("FORGE_MODEL") or cfg.get("model"))
+    _warn_demo_mode()
     return llm.Stub()
+
+
+_demo_warned = False
+
+
+def _warn_demo_mode():
+    global _demo_warned
+    if not _demo_warned:
+        _demo_warned = True
+        import sys
+        print(
+            "[Forge] no engine found (Ollama not running, no ANTHROPIC_API_KEY) "
+            "— demo mode with canned lessons. Run `forge init` to set up a real "
+            "engine.",
+            file=sys.stderr,
+        )
 
 
 def _pick_ollama(models: list[str], cfg: dict) -> str:

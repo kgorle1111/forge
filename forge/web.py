@@ -87,7 +87,18 @@ class Handler(BaseHTTPRequestHandler):
     def _local_host(self) -> bool:
         """Reject non-local Host headers (DNS-rebinding guard for a local API)."""
         host = (self.headers.get("Host") or "").split(":")[0].strip("[]")
-        return host in ("127.0.0.1", "localhost", "::1")
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            return False
+        # CSRF guard: browsers attach Origin on cross-site requests; the Host
+        # check alone can't stop an evil page blind-POSTing to 127.0.0.1
+        origin = self.headers.get("Origin")
+        if origin:
+            try:
+                ohost = origin.split("//", 1)[1].split(":")[0].strip("[]")
+            except IndexError:
+                return False
+            return ohost in ("127.0.0.1", "localhost", "::1")
+        return True
 
     def _send(self, obj, ctype="application/json", code=200):
         body = obj if isinstance(obj, bytes) else json.dumps(obj).encode()
@@ -176,6 +187,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._local_host():
             return self._send({"error": "forbidden"}, code=403)
         n = int(self.headers.get("Content-Length") or 0)
+        if n > 16 * 1024 * 1024:  # bound attacker-controlled reads (source uploads fit well under this)
+            return self._send({"error": "body too large"}, code=413)
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
         except json.JSONDecodeError:
@@ -214,7 +227,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 self._send({"error": str(e)}, code=404)
         elif self.path == "/api/setup":
-            from .config import save
+            from .config import load, save
             from .wizard import setup_state
             engine = str(body.get("engine", "")).strip()[:20]
             model = str(body.get("model") or "").strip()[:200] or None
@@ -227,7 +240,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(
                     {"error": "engine must be ollama or stub — for the "
                      "Anthropic API run `forge init` in a terminal"}, code=400)
-            save({"engine": engine, "model": model})
+            # merge, never overwrite: a wizard-stored api_key must survive
+            # an engine switch from the dashboard
+            cfg = load()
+            cfg.update({"engine": engine, "model": model})
+            save(cfg)
             self._send(setup_state(Memory()))
         elif self.path == "/api/learner":
             name = str(body.get("learner", "")).strip()

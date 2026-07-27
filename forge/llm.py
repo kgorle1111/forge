@@ -100,6 +100,10 @@ class AnthropicEngine:
         try:
             with urllib.request.urlopen(req, timeout=120) as r:
                 data = json.loads(r.read())
+        except json.JSONDecodeError:
+            raise RuntimeError(
+                "Anthropic API returned a non-JSON response — likely a proxy "
+                "or captive portal in the way; check your network") from None
         except urllib.error.HTTPError as e:
             # never include the key in any message
             hints = {
