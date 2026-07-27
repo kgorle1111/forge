@@ -190,7 +190,10 @@ class Memory:
         else:
             reps += 1
             interval = 1.0 if reps == 1 else 6.0 if reps == 2 else interval * ease
-            ease = max(1.3, ease + 0.1 - (5 - q) * (0.08 + (5 - q) * 0.02))
+            # R1 fix: unbroken perfect streaks compounded to decades — cap like
+            # Anki (ease ceiling 2.5, interval ceiling 1 year)
+            interval = min(interval, 365.0)
+            ease = min(2.5, max(1.3, ease + 0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)))
         due = now + interval * DAY
         self.db.execute(
             "UPDATE cards SET ease=?, interval_days=?, due=?, reps=?, lapses=?, retired=0 WHERE id=?",

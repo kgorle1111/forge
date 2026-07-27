@@ -1647,20 +1647,21 @@ def test_robust_scheduler_year_scale_properties():
     assert warn["peak_count"] >= 55 and warn["overloaded_days"]
 
 
-def test_robust_scheduler_uncapped_growth_documented():
-    # DEFECT (reported, not fixed): record() has no interval or ease ceiling.
-    # 9 consecutive perfect reviews push the interval past 10 years and ease
-    # grows without bound (+0.1 per perfect review). Pinned as-is so the fix
-    # (interval cap / ease ceiling a la Anki) shows up as a test change.
+def test_robust_scheduler_growth_is_capped():
+    # R1 fix: unbroken perfect streaks used to compound past 10-year
+    # intervals with unbounded ease; now capped like Anki
     m = Memory(":memory:")
     now = time.time()
     iv = 0.0
-    for _ in range(9):
+    for _ in range(20):
         entry = m.record("runaway", "perfect", 1.0, now=now)
         iv = entry["next_interval_days"]
         now = entry["due"]
-    assert iv > 3650, f"expected uncapped >10y interval, got {iv}"  # current behavior
-    assert entry["ease"] > 3.2  # ease drifted above Anki's 2.5 ceiling
+    assert iv <= 365.0, f"interval cap breached: {iv}"
+    assert entry["ease"] <= 2.5  # Anki's ease ceiling
+    # a lapse after the long streak still resets short
+    entry = m.record("runaway", "perfect", 0.2, now=now)
+    assert entry["next_interval_days"] == 1.0
 
 
 # === WS-EVAL ===
