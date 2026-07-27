@@ -189,6 +189,10 @@ Engine resolution order: `FORGE_STUB` → `FORGE_ENGINE` → the config file's
 | `FORGE_OLLAMA` | `http://localhost:11434` | Ollama location |
 | `FORGE_ANTHROPIC_URL` | `https://api.anthropic.com` | Anthropic API base URL |
 | `FORGE_CONFIG` | `~/.forge/config.json` | engine config file written by `forge init` |
+
+The config file also accepts `{"models": {"teach": ..., "grade": ...}}` to
+right-size models per stage (env vars win when set). Lessons stream
+token-by-token into the dashboard as they generate.
 | `FORGE_DB` | `~/.forge/forge.db` | memory file |
 | `FORGE_STUB` | unset | `1` = no-LLM demo/offline mode |
 
@@ -201,3 +205,17 @@ Engine resolution order: `FORGE_STUB` → `FORGE_ENGINE` → the config file's
 Covers the grading heuristic, SM-2 interval math, the full mastery loop
 (including being trapped and re-taught), interleaving of old weaknesses,
 graph export, and the web dashboard driven over HTTP.
+
+## Proving quality, not claiming it
+
+```bash
+.venv/bin/forge eval        # teaching-quality harness: 13 golden sessions,
+                            # per-stage deterministic checks; the LLM-judge
+                            # column prints "—" until calibrated against
+                            # human-labeled sessions — never a made-up number
+.venv/bin/forge doctor --full           # engine health, db integrity, latency
+.venv/bin/forge bundle-debug report.zip # shareable diagnostics; never includes
+                                        # your config, database, or key
+```
+
+Security posture and what leaves your machine per engine: [SECURITY.md](SECURITY.md).

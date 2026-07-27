@@ -11,15 +11,21 @@ Forge is a local-first tool. Here is exactly what leaves your machine, per engin
 
 ## Where the API key lives
 
-- Preferred: the `ANTHROPIC_API_KEY` environment variable (`forge/config.py`, `api_key()`).
+- Sources, in the order the code actually reads them (`forge/config.py`, `api_key()`):
+  a key stored in `config.json` (explicit `forge init --store-key` opt-in) **wins over**
+  the environment variable named by `api_key_env` (default `ANTHROPIC_API_KEY`).
+  If you rotate a key in your environment, also remove any stale stored key
+  (`forge init` rewrites it). `config.json` is fully trusted local state.
 - Optional: `~/.forge/config.json`, only when you explicitly opt in via
   `forge init --store-key`. The config file is written atomically with `0600`
   permissions (`forge/config.py`, `save()`). `forge doctor --full` warns if the
   perms have drifted.
 - The key is never logged and never included in error messages
   (`forge/llm.py` error paths raise fixed, key-free hints).
-- `forge bundle-debug` never packages `config.json`, the database, or
-  environment variables.
+- `forge bundle-debug` never packages `config.json`, the database, or any
+  secret values. Non-secret paths/URLs from your environment (the `FORGE_DB`
+  path, your Ollama URL) do appear in the bundled doctor output — review
+  before sharing, as the tool itself reminds you.
 
 ## Dashboard
 
