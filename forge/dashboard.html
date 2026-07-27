@@ -411,6 +411,7 @@ you rebuild it from memory, and nothing below <b>0.8</b> passes the gate.
 const $ = id => document.getElementById(id);
 const log = $("log"), box = $("box");
 let awaiting = false, polling = null, thinking = false, refreshTimer = null;
+let streamNode = null;  // live lesson line while chunks arrive
 let sourcePayload = null;
 let statRows = [], sortState = { key: "risk", dir: -1 }, sessionTranscript = [];
 let settings = Object.assign({ refresh: "30000", compact: false, motion: true },
@@ -685,7 +686,18 @@ function setThinking(on) { thinking = on; $("think").classList.toggle("on", on);
 /* ── session driving ──────────────────────────────────── */
 async function poll() {
   for (const e of await api("/api/events")) {
-    if (e.type === "say") { setThinking(false); render(e.text); if (!awaiting) setThinking(true); }
+    if (e.type === "say") {
+      // the final lesson replaces the live streaming line — never duplicate
+      if (streamNode) { streamNode.remove(); streamNode = null; }
+      setThinking(false); render(e.text); if (!awaiting) setThinking(true);
+    }
+    else if (e.type === "chunk") {
+      setThinking(false);
+      if (!streamNode)
+        streamNode = entry('<span class="badge synth">Synthesizer</span><span class="body stream"></span>', "lesson");
+      streamNode.querySelector(".stream").textContent += e.text;
+      log.scrollTop = log.scrollHeight;
+    }
     else if (e.type === "ask") {
       sessionTranscript.push(e.text.replace(/\n> $/, ""));
       entry('<span class="badge inq">Inquisitor</span><span class="body">' +

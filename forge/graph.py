@@ -13,7 +13,7 @@ from langgraph.graph import END, StateGraph
 from .agents import (QUIZ, _json, evaluator, grade, inquisitor, orchestrator,
                      route_after_evaluation, route_after_orchestration,
                      synthesizer)
-from .llm import get_grader, get_llm
+from .llm import get_grader, get_llm, stream_or_ask
 from .memory import DAY, Memory
 from .sources import source_manifest as build_source_manifest
 from .state import ForgeState
@@ -36,16 +36,36 @@ def build_graph():
     return g.compile(checkpointer=MemorySaver())
 
 
+class _StreamingLLM:
+    """Streams non-JSON asks (in the learn loop that is exactly the lesson
+    call) through stream_or_ask, forwarding chunks to emit_chunk. JSON asks
+    (curriculum, quiz, grading) pass through unchanged. Wrapping instead of
+    editing the synthesizer keeps agents.py byte-identical."""
+
+    def __init__(self, llm, on_chunk):
+        self._llm, self._on_chunk = llm, on_chunk
+
+    def __getattr__(self, name):
+        return getattr(self._llm, name)
+
+    def ask(self, prompt: str, as_json: bool = False) -> str:
+        if as_json:
+            return self._llm.ask(prompt, as_json=True)
+        return stream_or_ask(self._llm, prompt, self._on_chunk)
+
+
 def run_topic(topic: str, ask, emit=print, llm=None, memory=None,
               max_failed_attempts: int = 0, source: str = "",
               grader=None, correct_lessons: bool = False,
-              source_manifest: dict | None = None) -> ForgeState:
+              source_manifest: dict | None = None,
+              emit_chunk=None) -> ForgeState:
     graph = build_graph()
+    base_llm = llm or get_llm()
     config = {
         "configurable": {
             # resume lives in Memory.progress, not the checkpointer -> fresh thread
             "thread_id": str(uuid.uuid4()),
-            "llm": llm or get_llm(),
+            "llm": _StreamingLLM(base_llm, emit_chunk) if emit_chunk else base_llm,
             "grader": grader if grader is not None else (llm or get_grader()),
             "memory": memory or Memory(),
             "ask": ask,

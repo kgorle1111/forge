@@ -34,6 +34,11 @@ class Session:
     def emit(self, text=""):
         self.events.put({"type": "say", "text": str(text)})
 
+    def emit_chunk(self, text: str):
+        # additive event type: a live fragment of the lesson being generated;
+        # the full lesson still arrives afterwards as a normal "say" event
+        self.events.put({"type": "chunk", "text": str(text)})
+
     def ask(self, prompt: str) -> str:
         self.events.put({"type": "ask", "text": str(prompt)})
         return self.inbox.get()
@@ -203,7 +208,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send({"error": str(e)}, code=400)
             ok = SESSION.start(lambda: run_topic(
                 topic, ask=SESSION.ask, emit=SESSION.emit,
-                memory=Memory(), source=source, source_manifest=manifest))
+                memory=Memory(), source=source, source_manifest=manifest,
+                emit_chunk=SESSION.emit_chunk))
             self._send({"ok": ok} if ok else {"error": "session already running"})
         elif self.path == "/api/review":
             ok = SESSION.start(lambda: run_review(

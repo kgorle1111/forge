@@ -1505,6 +1505,411 @@ def test_p4_store_key_path_writes_key_via_getpass_only():
     assert "sk-ant-test-SECRET" not in printed[0]  # never echoed
 
 
+# === WS-ROBUST ===
+# B3 content robustness: adversarial sources, curriculum determinism, and
+# year-scale SM-2 scheduler properties. All offline (FORGE_STUB=1).
+
+_FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "fixtures", "sources")
+
+
+def test_robust_huge_source_bounded_and_fast():
+    # ~2MB text through the real --from path: SOURCE_LIMIT clamps to 8000
+    # chars, so chunk count stays bounded and ingestion is O(limit).
+    root = tempfile.mkdtemp()
+    huge = os.path.join(root, "huge.txt")
+    with open(huge, "w", encoding="utf-8") as f:
+        f.write("Spaced retrieval practice strengthens long-term memory. " * 37000)
+    assert os.path.getsize(huge) > 2_000_000
+    t0 = time.time()
+    text = read_source(huge)
+    manifest = build_source_manifest([("huge.txt", text)])
+    elapsed = time.time() - t0
+    assert elapsed < 10.0, f"huge source ingestion took {elapsed:.1f}s"
+    assert len(text) <= 8000
+    n_chunks = sum(len(d["chunks"]) for d in manifest["docs"])
+    assert 0 < n_chunks < 20, f"chunk count not bounded: {n_chunks}"
+
+
+def test_robust_binary_pdf_is_prescriptive_error():
+    # Binary-garbage .pdf: both failure modes raise a prescriptive
+    # SourceError (clean skip), never a raw traceback. Verified for
+    # (a) pdftotext absent from PATH and (b) pdftotext exiting nonzero.
+    from forge.sources import SourceError
+    garbage = os.path.join(_FIXTURES, "garbage.pdf")
+    old_path = os.environ.get("PATH", "")
+    empty = tempfile.mkdtemp()
+    try:
+        os.environ["PATH"] = empty  # no pdftotext anywhere
+        try:
+            read_source(garbage)
+            raise AssertionError("expected SourceError without pdftotext")
+        except SourceError as e:
+            assert "pdftotext" in str(e) and "Poppler" in str(e)
+        fake_bin = tempfile.mkdtemp()
+        fake = os.path.join(fake_bin, "pdftotext")
+        with open(fake, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\necho 'Syntax Error: not a PDF' >&2\nexit 1\n")
+        os.chmod(fake, 0o755)
+        os.environ["PATH"] = fake_bin
+        try:
+            read_source(garbage)
+            raise AssertionError("expected SourceError from failing pdftotext")
+        except SourceError as e:
+            assert "pdftotext failed" in str(e)
+    finally:
+        os.environ["PATH"] = old_path
+
+
+def test_robust_unicode_source_survives_chunks_and_citations():
+    text = read_source(os.path.join(_FIXTURES, "spanish.md"))
+    assert "recuperación" in text and "Cañas y Muñoz" in text
+    chunks = chunk_source(text, size=120, overlap=20)
+    joined = " ".join(c["text"] for c in chunks)
+    for token in ("recuperación", "sueño", "exámenes", "retención", "Cañas", "Muñoz", "—"):
+        assert token in joined, f"unicode token mangled in chunks: {token}"
+    manifest = build_source_manifest([("spanish.md", text)])
+    block = source_citation_block(manifest, "memoria retención aprendizaje")
+    assert "[S1]" in block and "ó" in block  # citations keep diacritics
+
+
+def test_robust_contradictory_source_reaches_prompts_verbatim():
+    # Stub can't test model behavior; assert the plumbing — the contradictory
+    # source text reaches curriculum and lesson prompts via the manifest.
+    claim = "The sky is green and grass is purple according to this source."
+    spy = Spy()
+    final = run_topic("colors", ask=lambda p: "remember alpha beta gamma",
+                      emit=lambda *_: None, llm=spy, memory=Memory(":memory:"),
+                      source=claim)
+    assert final["mastery"] is True
+    curriculum = [p for p in spy.prompts if '"concepts"' in p]
+    assert any(claim in p for p in curriculum), "source text missing from curriculum prompt"
+    lessons = [p for p in spy.prompts if p.startswith("Teach the concept")]
+    assert any("sky is green" in p and "[S1]" in p for p in lessons), \
+        "manifest snippet missing from lesson prompt"
+
+
+def test_robust_braces_in_source_do_not_crash():
+    # regression: source text is concatenated, never .format()ed
+    text = read_source(os.path.join(_FIXTURES, "braces.md"))
+    assert "{placeholders}" in text and "{name!r:>10}" in text
+    spy = Spy()
+    final = run_topic("formatting", ask=lambda p: "remember alpha beta gamma",
+                      emit=lambda *_: None, llm=spy, memory=Memory(":memory:"),
+                      source=text)
+    assert final["mastery"] is True
+    assert any("{placeholders}" in p for p in spy.prompts)
+
+
+def test_robust_curriculum_determinism_under_stub():
+    """5 identical stub run_topic calls must yield identical concept lists.
+
+    Real-engine variance measurement is BLOCKED-ON-H2 (needs a live model);
+    this pins the deterministic offline contract only.
+    """
+    runs = []
+    for _ in range(5):
+        final = run_topic("determinism", ask=lambda p: "remember alpha beta gamma",
+                          emit=lambda *_: None, llm=Stub(), memory=Memory(":memory:"))
+        runs.append([c["name"] for c in final["concepts"]])
+    assert all(r == runs[0] for r in runs), f"concept lists diverged: {runs}"
+    assert len(runs[0]) == 3
+
+
+def test_robust_scheduler_year_scale_properties():
+    # ~400 simulated reviews across 40 cards; SM-2 invariants must hold.
+    import math
+    m = Memory(":memory:")
+    t0 = time.time()
+    pattern = [1.0, 0.9, 1.0, 0.4, 1.0, 0.85, 0.2, 1.0, 0.95, 1.0]
+    for card_i in range(40):
+        now = t0
+        for rev_i, score in enumerate(pattern):
+            entry = m.record("simtopic", f"concept-{card_i}", score, now=now)
+            iv = entry["next_interval_days"]
+            assert not math.isnan(iv) and iv >= 0, f"bad interval {iv}"
+            assert iv < 3650, f"interval blew past 10y cap: {iv}"
+            assert entry["ease"] >= 1.3, f"ease below SM-2 floor: {entry['ease']}"
+            if score < 0.6:  # q<3 => lapse resets short
+                assert iv == 1.0, f"lapse did not reset interval: {iv}"
+            assert entry["due"] >= now
+            now = entry["due"] + DAY  # review one day late, forever
+    # due_queue ordering is stable: sorted by (-yield_score, due)
+    q = m.due_queue(days=3650, now=now)
+    keys = [(-c["yield_score"], c["due"]) for c in q]
+    assert keys == sorted(keys), "due_queue ordering unstable"
+    # avalanche: 55 lapsed cards all land due tomorrow -> warning fires
+    m2 = Memory(":memory:")
+    for i in range(55):
+        m2.record("pileup", f"c{i}", 0.0, now=t0)  # fail => due in 1 day
+    warn = m2.avalanche_warning(days=14, daily_budget=20, now=t0)
+    assert warn["warning"] is True
+    assert warn["peak_count"] >= 55 and warn["overloaded_days"]
+
+
+def test_robust_scheduler_uncapped_growth_documented():
+    # DEFECT (reported, not fixed): record() has no interval or ease ceiling.
+    # 9 consecutive perfect reviews push the interval past 10 years and ease
+    # grows without bound (+0.1 per perfect review). Pinned as-is so the fix
+    # (interval cap / ease ceiling a la Anki) shows up as a test change.
+    m = Memory(":memory:")
+    now = time.time()
+    iv = 0.0
+    for _ in range(9):
+        entry = m.record("runaway", "perfect", 1.0, now=now)
+        iv = entry["next_interval_days"]
+        now = entry["due"]
+    assert iv > 3650, f"expected uncapped >10y interval, got {iv}"  # current behavior
+    assert entry["ease"] > 3.2  # ease drifted above Anki's 2.5 ceiling
+
+
+# === WS-EVAL ===
+
+def test_eval_runner_green_on_committed_corpus():
+    from forge import evals
+    records = evals.load_golden()
+    assert len(records) >= 12
+    ok, results = evals.run_evals(records)
+    assert ok, [r for r in results
+                if not all(v[0] for v in r["checks"].values())]
+    # judge must be the literal em dash while H6 labels don't exist
+    assert not evals.HUMAN_LABELS.exists()  # human-only; never created here
+    for r in results:
+        assert r["judge"]["score"] == "—"
+        assert r["judge"]["note"] == evals.UNCALIBRATED
+
+
+def test_eval_corrupted_record_fails_the_right_check():
+    from forge import evals
+    base = evals.load_golden()[0]
+
+    bad = json.loads(json.dumps(base))
+    bad["checks"]["lesson"]["required_markers"] = ["THIS-NEVER-APPEARS"]
+    r = evals.check_record(bad)
+    assert not r["lesson"][0] and r["curriculum"][0] and r["grading"][0]
+
+    bad = json.loads(json.dumps(base))
+    bad["checks"]["curriculum"]["required_concepts"] = ["nonexistent concept"]
+    r = evals.check_record(bad)
+    assert not r["curriculum"][0] and r["lesson"][0]
+
+    bad = json.loads(json.dumps(base))
+    bad["checks"]["grading"][0]["expected_band"] = [0.0, 0.1]  # a 1.0 answer
+    r = evals.check_record(bad)
+    assert not r["grading"][0] and r["quiz"][0]
+
+    bad = json.loads(json.dumps(base))
+    bad["checks"]["quiz"]["min_term_overlap"] = 1.1  # unreachable floor
+    r = evals.check_record(bad)
+    assert not r["quiz"][0]
+
+
+def test_eval_cli_exit_codes():
+    from forge import cli, evals
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        cli.main(["eval"])  # success path: returns normally (exit 0)
+    assert "eval PASS" in buf.getvalue()
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        cli.main(["eval", "--json"])
+    out = json.loads("\n".join(
+        line for line in buf.getvalue().splitlines()
+        if not line.startswith("[Forge]")) or buf.getvalue())
+    assert out["pass"] is True
+    assert all(r["judge"]["score"] == "—" for r in out["results"])
+
+    # failure path: a corrupted corpus must exit 1
+    tmp = tempfile.mkdtemp()
+    bad = json.loads(json.dumps(evals.load_golden()[0]))
+    bad.pop("_name")
+    bad["checks"]["lesson"]["required_markers"] = ["NOPE"]
+    with open(os.path.join(tmp, "bad.json"), "w", encoding="utf-8") as f:
+        json.dump(bad, f)
+    real = evals.GOLDEN_DIR
+    evals.GOLDEN_DIR = type(real)(tmp)
+    try:
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                cli.main(["eval"])
+            raise AssertionError("expected SystemExit(1)")
+        except SystemExit as e:
+            assert e.code == 1
+        assert "!! lesson" in buf.getvalue()
+    finally:
+        evals.GOLDEN_DIR = real
+
+
+# === WS-STREAM ===
+
+def test_ws_stub_stream_determinism():
+    s = Stub()
+    prompt = 'Teach the concept "streaming" (part of topic "t"; summary: x). angle: analogy'
+    chunks = list(s.ask_stream(prompt))
+    assert len(chunks) >= 3
+    assert "".join(chunks) == s.ask(prompt)
+    from forge.llm import stream_or_ask
+    seen = []
+    assert stream_or_ask(s, prompt, on_chunk=seen.append) == s.ask(prompt)
+    assert seen == chunks
+
+
+def test_ws_stream_or_ask_fallback():
+    from forge.llm import stream_or_ask
+
+    class NoStream:
+        def ask(self, prompt, as_json=False):
+            return f"plain:{prompt}"
+
+    seen = []
+    assert stream_or_ask(NoStream(), "p", on_chunk=seen.append) == "plain:p"
+    assert seen == []  # no ask_stream -> pure fallback
+    # no on_chunk -> fallback even when ask_stream exists
+    assert stream_or_ask(Stub(), 'concept "x" angle: analogy') == Stub().ask(
+        'concept "x" angle: analogy')
+
+
+def test_ws_ollama_ask_stream():
+    import http.server as hs
+
+    lines = [{"response": "hello "}, {"response": "<think>hmm</think>"},
+             {"response": "world"}, {"done": True}]
+
+    class JsonLines(hs.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+            assert body["stream"] is True
+            payload = b"".join(json.dumps(x).encode() + b"\n" for x in lines)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *a):
+            pass
+
+    server = hs.ThreadingHTTPServer(("127.0.0.1", 0), JsonLines)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    old = forge_llm.OLLAMA_URL
+    forge_llm.OLLAMA_URL = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        from forge.llm import stream_or_ask
+        seen = []
+        out = stream_or_ask(Ollama("m"), "p", on_chunk=seen.append)
+        assert seen == ["hello ", "<think>hmm</think>", "world"]
+        assert out == "hello world"  # think-stripped on the joined result, like ask()
+    finally:
+        forge_llm.OLLAMA_URL = old
+        server.shutdown()
+
+
+def test_ws_anthropic_ask_stream():
+    import http.server as hs
+
+    sse = (b'event: message_start\n'
+           b'data: {"type": "message_start"}\n\n'
+           b'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "str"}}\n\n'
+           b'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "eam"}}\n\n'
+           b'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "ed"}}\n\n'
+           b'data: [DONE]\n\n')
+
+    class SSE(hs.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+            assert body["stream"] is True
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(sse)))
+            self.end_headers()
+            self.wfile.write(sse)
+
+        def log_message(self, *a):
+            pass
+
+    server = hs.ThreadingHTTPServer(("127.0.0.1", 0), SSE)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    with _engine_env(ANTHROPIC_API_KEY=_FAKE_KEY,
+                     FORGE_ANTHROPIC_URL=f"http://127.0.0.1:{server.server_address[1]}"):
+        try:
+            from forge.llm import stream_or_ask
+            seen = []
+            out = stream_or_ask(AnthropicEngine(), "p", on_chunk=seen.append)
+            assert seen == ["str", "eam", "ed"]
+            assert out == "streamed"
+        finally:
+            server.shutdown()
+
+
+def test_ws_web_chunk_events():
+    from http.server import ThreadingHTTPServer
+
+    from forge import web
+    os.environ["FORGE_DB"] = os.path.join(tempfile.mkdtemp(), "ws-web.db")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+
+    def call(method, path, body=None):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request(method, path, json.dumps(body) if body else None)
+        return json.loads(conn.getresponse().read())
+
+    t0 = time.time()
+    assert call("POST", "/api/learn", {"topic": "wstream"})["ok"] is True
+    events, first_chunk_at, ended, deadline = [], None, False, time.time() + 30
+    while not ended and time.time() < deadline:
+        for e in call("GET", "/api/events"):
+            events.append(e)
+            if e["type"] == "chunk" and first_chunk_at is None:
+                first_chunk_at = time.time()
+            elif e["type"] == "ask":
+                call("POST", "/api/answer", {"text": "remember alpha beta gamma"})
+            elif e["type"] == "end":
+                ended = True
+        time.sleep(0.02)
+    server.shutdown()
+    assert ended, "streaming web session never finished"
+    # every pre-existing event type still appears (additive-only protocol)
+    types = {e["type"] for e in events}
+    assert {"say", "ask", "end"} <= types
+    # >=3 chunk events precede the corresponding final lesson "say" event
+    lesson_idx = next(i for i, e in enumerate(events)
+                      if e["type"] == "say" and e["text"].startswith("LESSON["))
+    chunks_before = [e for e in events[:lesson_idx] if e["type"] == "chunk"]
+    assert len(chunks_before) >= 3
+    assert "".join(e["text"] for e in chunks_before) == events[lesson_idx]["text"]
+    assert first_chunk_at is not None and first_chunk_at - t0 < 2.0
+
+
+def test_ws_models_key_resolution():
+    cfg = os.path.join(tempfile.mkdtemp(), "config.json")
+    with open(cfg, "w", encoding="utf-8") as f:
+        json.dump({"models": {"teach": "teach-m", "grade": "grade-m"}}, f)
+    # env absent: models keys are honored
+    with _engine_env(FORGE_ENGINE="anthropic", FORGE_CONFIG=cfg,
+                     ANTHROPIC_API_KEY=_FAKE_KEY):
+        llm = get_llm()
+        assert llm.model == "teach-m"
+        assert _get_grader().model == "grade-m"
+    # env always wins over the models keys
+    with _engine_env(FORGE_ENGINE="anthropic", FORGE_CONFIG=cfg,
+                     ANTHROPIC_API_KEY=_FAKE_KEY,
+                     FORGE_MODEL="env-teach", FORGE_GRADER="env-grade"):
+        assert get_llm().model == "env-teach"
+        assert _get_grader().model == "env-grade"
+    # absent keys: current behavior (default model)
+    cfg2 = os.path.join(tempfile.mkdtemp(), "config.json")
+    with open(cfg2, "w", encoding="utf-8") as f:
+        json.dump({}, f)
+    with _engine_env(FORGE_ENGINE="anthropic", FORGE_CONFIG=cfg2,
+                     ANTHROPIC_API_KEY=_FAKE_KEY):
+        assert get_llm().model == forge_llm.DEFAULT_ANTHROPIC_MODEL
+        assert _get_grader().model == forge_llm.DEFAULT_ANTHROPIC_MODEL
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()

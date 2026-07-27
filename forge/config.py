@@ -40,6 +40,14 @@ def save(cfg: dict) -> str:
     return path
 
 
+def model_for(role: str, cfg: dict | None = None) -> str | None:
+    """Optional per-role model from config {"models": {"teach"|"grade"|"curriculum": str}}.
+    Env (FORGE_MODEL/FORGE_GRADER) always wins at the call sites."""
+    cfg = load() if cfg is None else cfg
+    models = cfg.get("models")
+    return models.get(role) if isinstance(models, dict) else None
+
+
 def api_key(cfg: dict | None = None) -> str | None:
     cfg = load() if cfg is None else cfg
     return cfg.get("api_key") or os.environ.get(
@@ -73,7 +81,7 @@ def resolve_engine():
         return llm.Ollama(_pick_ollama(models, cfg))
     if api_key(cfg):
         return llm.AnthropicEngine(
-            model=os.environ.get("FORGE_MODEL") or cfg.get("model"))
+            model=os.environ.get("FORGE_MODEL") or cfg.get("model") or model_for("teach", cfg))
     _warn_demo_mode()
     return llm.Stub()
 
@@ -95,7 +103,7 @@ def _warn_demo_mode():
 
 
 def _pick_ollama(models: list[str], cfg: dict) -> str:
-    return os.environ.get("FORGE_MODEL") or cfg.get("model") or next(
+    return os.environ.get("FORGE_MODEL") or cfg.get("model") or model_for("teach", cfg) or next(
         (m for m in models if any(k in m for k in ("coder", "llama", "qwen", "mistral"))),
         models[0],
     )
@@ -108,9 +116,9 @@ def _build(name: str, cfg: dict):
         return llm.Stub()
     if name == "anthropic":
         return llm.AnthropicEngine(
-            model=os.environ.get("FORGE_MODEL") or cfg.get("model"))
+            model=os.environ.get("FORGE_MODEL") or cfg.get("model") or model_for("teach", cfg))
     if name == "ollama":
-        model = os.environ.get("FORGE_MODEL") or cfg.get("model")
+        model = os.environ.get("FORGE_MODEL") or cfg.get("model") or model_for("teach", cfg)
         if not model:
             try:
                 models = llm._available_models()
