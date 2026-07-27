@@ -23,5 +23,6 @@ fi
 
 echo
 echo "Ready. Next:"
+echo "  .venv/bin/forge init       # pick your engine (ollama / anthropic / stub)"
 echo "  .venv/bin/forge web        # dashboard at http://127.0.0.1:8765"
 echo "  .venv/bin/forge learn \"<topic>\""

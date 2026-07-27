@@ -20,8 +20,9 @@ recall:
   schedule to your own forgetting curve, ranks your genuine weak spots, and
   interleaves them back into future quizzes so nothing you've learned stays safe.
 
-100% local: your own Ollama model, one SQLite file, zero cloud, zero API keys,
-zero telemetry.
+Local-first: runs 100% locally on your own Ollama model with zero cloud and
+zero API keys — or, if you prefer, bring an Anthropic API key instead of
+installing anything. Either way: one SQLite file, zero telemetry.
 
 ---
 
@@ -40,20 +41,43 @@ A failed answer routes back to the Synthesizer, which rotates through six
 teaching angles instead of repeating itself. The grading model is swappable
 independently of the teaching model (`FORGE_GRADER`) for stricter evaluation.
 
-## Demo
+## Install
+
+### From source (today)
 
 ```bash
+git clone https://github.com/kgorle1111/forge && cd forge
 bash UP-AND-RUNNING/setup.sh        # one command: venv, install, tests, health check
+.venv/bin/forge init                # pick your engine (ollama / anthropic / stub)
 .venv/bin/forge web                 # dashboard -> http://127.0.0.1:8765
 ```
 
-No Ollama installed? Run in stub mode for an instant offline demo:
+### One-command install (on PyPI release)
 
-```bash
-FORGE_STUB=1 FORGE_DB=/tmp/forge_demo.db .venv/bin/forge web --port 8766
+Once published to PyPI, these become the primary path:
+
+```
+uvx forge-learning web
 ```
 
-or the terminal:
+```
+uv tool install forge-learning && forge init
+```
+
+## Choosing your engine
+
+- **Local Ollama** — private and free. Install [Ollama](https://ollama.com),
+  `ollama pull` any model, then `forge init --engine ollama`. Forge auto-picks
+  a sensible model if you don't name one (`--model NAME` to force it).
+- **Cloud API** — no local model needed. `export ANTHROPIC_API_KEY=...` then
+  `forge init --engine anthropic`. The key stays in your environment — it is
+  never sent anywhere except the Anthropic API. Cost is small: a topic session
+  is typically cents on claude-haiku-4-5.
+- **Demo mode** — `forge init --engine stub`. Instant, deterministic, fully
+  offline; no AI quality, but every feature and test works.
+
+Skip `init` entirely and Forge auto-detects: running Ollama → Anthropic key →
+stub. Try the terminal:
 
 ```bash
 .venv/bin/forge learn "fourier transforms"
@@ -153,11 +177,17 @@ Binds to 127.0.0.1 only. No auth because it never leaves your machine.
 
 ## Configuration
 
+Engine resolution order: `FORGE_STUB` → `FORGE_ENGINE` → the config file's
+`engine` → auto-detect (Ollama, then Anthropic key, then stub).
+
 | Env var | Default | Purpose |
 |---|---|---|
-| `FORGE_MODEL` | auto (prefers coder/instruct) | force an Ollama model |
+| `FORGE_ENGINE` | unset | force `ollama`, `anthropic`, or `stub` (hard-fails if unhealthy) |
+| `FORGE_MODEL` | auto (prefers coder/instruct) | force a specific model |
 | `FORGE_GRADER` | same as teaching model | separate grading model for stricter evaluation |
 | `FORGE_OLLAMA` | `http://localhost:11434` | Ollama location |
+| `FORGE_ANTHROPIC_URL` | `https://api.anthropic.com` | Anthropic API base URL |
+| `FORGE_CONFIG` | `~/.forge/config.json` | engine config file written by `forge init` |
 | `FORGE_DB` | `~/.forge/forge.db` | memory file |
 | `FORGE_STUB` | unset | `1` = no-LLM demo/offline mode |
 
