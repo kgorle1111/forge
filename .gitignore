@@ -18,3 +18,6 @@ ROADMAP.md
 
 # local runtime data
 *.db
+
+# build artifacts
+dist/

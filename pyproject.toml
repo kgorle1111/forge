@@ -2,8 +2,26 @@
 name = "forge-learning"
 version = "0.1.0"
 description = "The Forge: closed-loop active-recall learning system on LangGraph"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Kannishk Naidu Gorle", email = "kannishknaidug@gmail.com" }]
+keywords = ["learning", "spaced-repetition", "active-recall", "llm", "ollama", "education"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Education",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Education",
+]
 requires-python = ">=3.10"
 dependencies = ["langgraph"]
+
+[project.urls]
+Repository = "https://github.com/kgorle1111/forge"
 
 [project.scripts]
 forge = "forge.cli:main"
