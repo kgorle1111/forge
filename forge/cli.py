@@ -1516,6 +1516,11 @@ def main(argv=None):
     except (SourceError, ValueError) as e:
         print(f"[Forge] {e}", file=sys.stderr)
         sys.exit(2)
+    except RuntimeError as e:
+        # resolve_engine hard-fails for forced-but-unavailable engines; the
+        # message is already prescriptive — show it, never a traceback
+        print(f"[Forge] {e}", file=sys.stderr)
+        sys.exit(2)
     except (KeyboardInterrupt, EOFError):
         print("\n[Forge] Session paused. Your schedule survives in ~/.forge/forge.db")
         sys.exit(130)

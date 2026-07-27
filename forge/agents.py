@@ -7,7 +7,6 @@ a test script, or any future interface.
 import json
 import re
 
-from .llm import Ollama
 from .sources import source_citation_block
 from .visuals import render_visual_lesson
 
@@ -75,7 +74,8 @@ def grade(llm, question: str, key_points: list[str], answer: str) -> dict:
     dead model open the gate."""
     score, missed = heuristic_detail(answer, key_points)
     feedback = ""
-    if isinstance(llm, Ollama):
+    # any real model may refine (ollama or anthropic); stub never does
+    if getattr(llm, "name", "") != "stub":
         try:
             j = _json(llm.ask(GRADE.format(q=question, kp=key_points, a=answer),
                               as_json=True))
