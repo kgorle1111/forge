@@ -1312,6 +1312,55 @@ def test_ws_wizard_api_setup_contract():
             server.shutdown()
 
 
+# === WS-QA ===
+
+def test_ws_qa_db_survives_close_and_reopen():
+    # upgrade-safety: a DB written by one process must fully drive a later one
+    db = os.path.join(tempfile.mkdtemp(), "qa.db")
+    m = Memory(db)
+    run_topic("qa reopen", ask=lambda _: "remember alpha beta gamma",
+              emit=lambda *_: None, llm=Stub(), memory=m)
+    m.db.close()
+
+    m2 = Memory(db)  # fresh connection: schema + _migrate must be idempotent
+    rows = m2.stats()
+    assert len(rows) == 3 and all(r["due"] > 0 for r in rows)
+    assert m2.lesson_for("qa reopen", "qa reopen: foundations")
+    due = m2.due_queue(days=2)  # mastered today -> due tomorrow
+    assert len(due) == 3
+    log = []
+    n = run_review(ask=lambda _: "remember alpha beta gamma", emit=log.append,
+                   llm=Stub(), memory=m2, days=2)
+    assert n == 3
+    assert any("retained" in line for line in log)
+
+
+def test_ws_qa_config_roundtrip_preserves_unknown_keys():
+    # forward-compat: a newer forge's config keys must survive load()+save()
+    cfg = os.path.join(tempfile.mkdtemp(), "config.json")
+    with _engine_env(FORGE_CONFIG=cfg):
+        forge_config.save({"engine": "stub", "model": None,
+                           "future_knob": {"nested": [1, 2]}})
+        loaded = forge_config.load()
+        assert loaded["future_knob"] == {"nested": [1, 2]}
+        forge_config.save(loaded)
+        assert forge_config.load()["future_knob"] == {"nested": [1, 2]}
+        assert stat.S_IMODE(os.stat(cfg).st_mode) == 0o600
+        # resolve still works with the unknown key present
+        assert forge_config.resolve_engine().name == "stub"
+
+
+def test_ws_qa_corrupt_config_auto_mode_falls_back_to_stub():
+    # a hand-edited/truncated config must never brick auto engine resolution
+    cfg = os.path.join(tempfile.mkdtemp(), "config.json")
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write('{"engine": "ollama", "model":')  # truncated JSON
+    with _engine_env(FORGE_CONFIG=cfg):  # dead ollama port, no env engine
+        llm = forge_config.resolve_engine()
+        assert llm.name == "stub"
+        assert llm.healthy()[0] is True
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()
