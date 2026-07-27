@@ -1509,6 +1509,15 @@ def main(argv=None):
     web.set_defaults(fn=cmd_web)
     sub.add_parser("stats", parents=[profile]).set_defaults(fn=cmd_stats)
     sub.add_parser("graph", parents=[profile]).set_defaults(fn=cmd_graph)
+    # === WS-EVAL ===
+    from .evals import cmd_eval
+    ev = sub.add_parser("eval", parents=[profile],
+                        help="run the golden-session teaching-quality evals")
+    ev.add_argument("--json", action="store_true",
+                    help="machine-readable results")
+    ev.add_argument("--regenerate", action="store_true",
+                    help="rebuild evals/golden/*.json from the stub loop")
+    ev.set_defaults(fn=cmd_eval)
     args = p.parse_args(argv)
     try:
         select_profile(args.learner)

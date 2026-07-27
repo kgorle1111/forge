@@ -1,0 +1,81 @@
+{
+  "checks": {
+    "curriculum": {
+      "max_concepts": 5,
+      "required_concepts": [
+        "foundations",
+        "mechanics",
+        "applications"
+      ]
+    },
+    "grading": [
+      {
+        "answer": "remember alpha beta gamma",
+        "expected_band": [
+          1.0,
+          1.0
+        ]
+      },
+      {
+        "answer": "only alpha here",
+        "expected_band": [
+          0.32,
+          0.35
+        ]
+      },
+      {
+        "answer": "alpha and beta together",
+        "expected_band": [
+          0.65,
+          0.68
+        ]
+      },
+      {
+        "answer": "no idea at all",
+        "expected_band": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "lesson": {
+      "required_markers": [
+        "LESSON[",
+        "alpha beta gamma"
+      ]
+    },
+    "quiz": {
+      "min_term_overlap": 1.0
+    }
+  },
+  "session": [
+    "\n== Curriculum for 'linear algebra' ==",
+    "  1. linear algebra: foundations \u2014 core definitions of linear algebra",
+    "  2. linear algebra: mechanics \u2014 how linear algebra works step by step",
+    "  3. linear algebra: applications \u2014 where linear algebra is used and why",
+    "\n-- Concept 1/3: linear algebra: foundations [angle: first principles] --",
+    "LESSON[linear algebra: foundations|first]: remember alpha beta gamma.",
+    "\n** Active recall \u2014 the lesson is gone. Reconstruct it. **",
+    "[Evaluator] Q1: 1.00",
+    "[Evaluator] Q2: 1.00",
+    "\n[Evaluator] PASS \u2014 score 1.00. Mastery advancing.",
+    "[Orchestrator] 'linear algebra: foundations' scheduled for review in 1.0 day(s).",
+    "\n-- Concept 2/3: linear algebra: mechanics [angle: first principles] --",
+    "LESSON[linear algebra: mechanics|first]: remember alpha beta gamma.",
+    "\n** Active recall \u2014 the lesson is gone. Reconstruct it. **",
+    "[Evaluator] Q1: 1.00",
+    "[Evaluator] Q2: 1.00",
+    "\n[Evaluator] PASS \u2014 score 1.00. Mastery advancing.",
+    "[Orchestrator] 'linear algebra: mechanics' scheduled for review in 1.0 day(s).",
+    "\n-- Concept 3/3: linear algebra: applications [angle: first principles] --",
+    "LESSON[linear algebra: applications|first]: remember alpha beta gamma.",
+    "\n** Active recall \u2014 the lesson is gone. Reconstruct it. **",
+    "[Evaluator] Q1: 1.00",
+    "[Evaluator] Q2: 1.00",
+    "\n[Evaluator] PASS \u2014 score 1.00. Mastery advancing.",
+    "[Orchestrator] 'linear algebra: applications' scheduled for review in 1.0 day(s).",
+    "\n== TOPIC MASTERED: linear algebra (mastery level 1.00) =="
+  ],
+  "source": null,
+  "topic": "linear algebra"
+}

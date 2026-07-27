@@ -1,0 +1,81 @@
+{
+  "checks": {
+    "curriculum": {
+      "max_concepts": 5,
+      "required_concepts": [
+        "foundations",
+        "mechanics",
+        "applications"
+      ]
+    },
+    "grading": [
+      {
+        "answer": "remember alpha beta gamma",
+        "expected_band": [
+          1.0,
+          1.0
+        ]
+      },
+      {
+        "answer": "only alpha here",
+        "expected_band": [
+          0.32,
+          0.35
+        ]
+      },
+      {
+        "answer": "alpha and beta together",
+        "expected_band": [
+          0.65,
+          0.68
+        ]
+      },
+      {
+        "answer": "no idea at all",
+        "expected_band": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "lesson": {
+      "required_markers": [
+        "LESSON[",
+        "alpha beta gamma"
+      ]
+    },
+    "quiz": {
+      "min_term_overlap": 1.0
+    }
+  },
+  "session": [
+    "\n== Curriculum for 'epoxy surface prep' ==",
+    "  1. epoxy surface prep: foundations \u2014 core definitions of epoxy surface prep",
+    "  2. epoxy surface prep: mechanics \u2014 how epoxy surface prep works step by step",
+    "  3. epoxy surface prep: applications \u2014 where epoxy surface prep is used and why",
+    "\n-- Concept 1/3: epoxy surface prep: foundations [angle: first principles] --",
+    "LESSON[epoxy surface prep: foundations|first]: remember alpha beta gamma.",
+    "\n** Active recall \u2014 the lesson is gone. Reconstruct it. **",
+    "[Evaluator] Q1: 1.00",
+    "[Evaluator] Q2: 1.00",
+    "\n[Evaluator] PASS \u2014 score 1.00. Mastery advancing.",
+    "[Orchestrator] 'epoxy surface prep: foundations' scheduled for review in 1.0 day(s).",
+    "\n-- Concept 2/3: epoxy surface prep: mechanics [angle: first principles] --",
+    "LESSON[epoxy surface prep: mechanics|first]: remember alpha beta gamma.",
+    "\n** Active recall \u2014 the lesson is gone. Reconstruct it. **",
+    "[Evaluator] Q1: 1.00",
+    "[Evaluator] Q2: 1.00",
+    "\n[Evaluator] PASS \u2014 score 1.00. Mastery advancing.",
+    "[Orchestrator] 'epoxy surface prep: mechanics' scheduled for review in 1.0 day(s).",
+    "\n-- Concept 3/3: epoxy surface prep: applications [angle: first principles] --",
+    "LESSON[epoxy surface prep: applications|first]: remember alpha beta gamma.",
+    "\n** Active recall \u2014 the lesson is gone. Reconstruct it. **",
+    "[Evaluator] Q1: 1.00",
+    "[Evaluator] Q2: 1.00",
+    "\n[Evaluator] PASS \u2014 score 1.00. Mastery advancing.",
+    "[Orchestrator] 'epoxy surface prep: applications' scheduled for review in 1.0 day(s).",
+    "\n== TOPIC MASTERED: epoxy surface prep (mastery level 1.00) =="
+  ],
+  "source": "Surface profile and dew point govern epoxy adhesion. Blast to the specified profile, verify substrate temperature 3C above dew point.",
+  "topic": "epoxy surface prep"
+}
