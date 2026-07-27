@@ -70,9 +70,10 @@ uv tool install forge-learning && forge init
   `ollama pull` any model, then `forge init --engine ollama`. Forge auto-picks
   a sensible model if you don't name one (`--model NAME` to force it).
 - **Cloud API** — no local model needed. `export ANTHROPIC_API_KEY=...` then
-  `forge init --engine anthropic`. The key stays in your environment — it is
-  never sent anywhere except the Anthropic API. Cost is small: a topic session
-  is typically cents on claude-haiku-4-5.
+  `forge init --engine anthropic`. The key stays in your environment and is
+  sent only to the Anthropic API endpoint Forge is configured to use. Cost:
+  estimated at cents per topic session on claude-haiku-4-5 (unmeasured —
+  we'll publish a real number once live-engine QA runs).
 - **Demo mode** — `forge init --engine stub`. Instant, deterministic, fully
   offline; no AI quality, but every feature and test works.
 
@@ -144,7 +145,7 @@ forge/
   agents.py     the four agents, their prompts, grading, mastery gate
   memory.py     SQLite: SM-2 scheduler, attempts, weaknesses, FTS5 lessons
   sources.py    local source ingestion, chunking, manifests, citations
-  llm.py        Ollama (stdlib HTTP) + deterministic offline stub
+  llm.py        engines: Ollama + Anthropic (stdlib HTTP) + offline stub
   web.py        dashboard server (stdlib http.server, localhost-only)
   dashboard.html  the dashboard UI (vanilla JS, no CDN, works offline)
   cli.py        terminal UI
@@ -173,7 +174,7 @@ Binds to 127.0.0.1 only. No auth because it never leaves your machine.
 - **Offline-first**: no Ollama → deterministic stub keeps every feature and test working (this is how the demo runs without setup).
 - **The gate can't be bribed**: if the LLM dies mid-session, grading falls back to deterministic key-point matching — a broken model can never auto-pass you.
 - **One-file state**: the entire learning history is `~/.forge/forge.db`.
-- **Low maintenance by construction**: one dependency (`langgraph`), stdlib everything else, no services, no keys to rotate.
+- **Low maintenance by construction**: one dependency (`langgraph`), stdlib everything else, no services; no keys at all on the Ollama path.
 
 ## Configuration
 
@@ -183,7 +184,7 @@ Engine resolution order: `FORGE_STUB` → `FORGE_ENGINE` → the config file's
 | Env var | Default | Purpose |
 |---|---|---|
 | `FORGE_ENGINE` | unset | force `ollama`, `anthropic`, or `stub` (hard-fails if unhealthy) |
-| `FORGE_MODEL` | auto (prefers coder/instruct) | force a specific model |
+| `FORGE_MODEL` | auto (prefers coder/llama/qwen/mistral names) | force a specific model |
 | `FORGE_GRADER` | same as teaching model | separate grading model for stricter evaluation |
 | `FORGE_OLLAMA` | `http://localhost:11434` | Ollama location |
 | `FORGE_ANTHROPIC_URL` | `https://api.anthropic.com` | Anthropic API base URL |
