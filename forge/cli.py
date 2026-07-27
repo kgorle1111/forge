@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 
+from .config import config_path
 from .graph import run_review, run_topic
 from .graphview import export
 from .graphview import layout as graph_layout
@@ -900,11 +901,22 @@ def cmd_doctor(args):
     except Exception as e:
         fts, ok = str(e), False
     pdf = shutil.which("pdftotext") or "missing"
-    model = get_llm().model
     print(f"db: {os.environ.get('FORGE_DB', '~/.forge/forge.db')}")
     print(f"integrity: {integrity}")
     print(f"fts: {fts}")
-    print(f"llm: {model}")
+    try:
+        llm = get_llm()
+        health_ok, health_msg = llm.healthy()
+        print(f"engine: {llm.name} ({llm.model})")
+        print(f"engine health: {'ok' if health_ok else 'FAIL'} — {health_msg}")
+        if not health_ok:
+            ok = False
+    except RuntimeError as e:
+        print(f"engine: FAIL — {e}")
+        ok = False
+    cfg_path = config_path()
+    present = "present" if os.path.exists(cfg_path) else "absent"
+    print(f"config: {cfg_path} ({present})")
     print(f"pdftotext: {pdf}")
     if m.missing_lessons():
         print(f"missing lessons: {len(m.missing_lessons())}")

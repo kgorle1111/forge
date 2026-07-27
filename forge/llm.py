@@ -1,10 +1,12 @@
-"""LLM access: local Ollama first, deterministic stub when no model is reachable.
+"""LLM engines: local Ollama, Anthropic API, and a deterministic offline Stub.
 
-Everything runs offline. No API keys, no cloud calls, no telemetry.
+Engine selection lives in forge.config.resolve_engine(); the default remains
+fully offline (Ollama or Stub). Anthropic is opt-in via key/config.
 """
 import json
 import os
 import re
+import urllib.error
 import urllib.request
 
 OLLAMA_URL = os.environ.get("FORGE_OLLAMA", "http://localhost:11434")
@@ -20,9 +22,28 @@ def _post(path: str, body: dict, timeout: int = 600) -> dict:
         return json.loads(r.read())
 
 
+THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+ANTHROPIC_VERSION = "2023-06-01"
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+
+
 class Ollama:
+    name = "ollama"
+
     def __init__(self, model: str):
         self.model = model
+
+    def healthy(self) -> tuple[bool, str]:
+        try:
+            models = _available_models()
+        except (OSError, ValueError, KeyError):
+            return (False, (f"Ollama not reachable at {OLLAMA_URL} — start it "
+                            "with `ollama serve`, or switch engines with "
+                            "FORGE_ENGINE=anthropic or FORGE_STUB=1"))
+        if self.model not in models:
+            return (False, (f"model '{self.model}' not installed — run "
+                            f"`ollama pull {self.model}` or unset FORGE_MODEL"))
+        return (True, f"ollama reachable, model '{self.model}' installed")
 
     def ask(self, prompt: str, as_json: bool = False) -> str:
         body = {
@@ -35,7 +56,69 @@ class Ollama:
             body["format"] = "json"
         text = _post("/api/generate", body)["response"]
         # reasoning models (deepseek-r1) wrap chain-of-thought in <think> tags
-        return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+        return THINK_RE.sub("", text).strip()
+
+
+class AnthropicEngine:
+    """Anthropic Messages API over stdlib urllib. Key comes from env or
+    ~/.forge/config.json; it is never logged and never appears in errors."""
+
+    name = "anthropic"
+
+    def __init__(self, model: str | None = None):
+        self.model = model or DEFAULT_ANTHROPIC_MODEL
+
+    def _key(self) -> str | None:
+        from . import config
+        return config.api_key()
+
+    def healthy(self) -> tuple[bool, str]:
+        if self._key():
+            return (True, f"API key found, model '{self.model}'")
+        return (False, ("no Anthropic API key — set ANTHROPIC_API_KEY or run "
+                        "`forge init`"))
+
+    def ask(self, prompt: str, as_json: bool = False) -> str:
+        key = self._key()
+        if not key:
+            raise RuntimeError("no Anthropic API key — set ANTHROPIC_API_KEY "
+                               "or run `forge init`")
+        if as_json:
+            prompt += "\n\nRespond with ONLY valid JSON, no prose."
+        base = os.environ.get("FORGE_ANTHROPIC_URL", "https://api.anthropic.com")
+        req = urllib.request.Request(
+            f"{base}/v1/messages",
+            json.dumps({
+                "model": self.model,
+                "max_tokens": 4096,
+                "temperature": 0.4,
+                "messages": [{"role": "user", "content": prompt}],
+            }).encode(),
+            {"Content-Type": "application/json", "x-api-key": key,
+             "anthropic-version": ANTHROPIC_VERSION},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                data = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            # never include the key in any message
+            hints = {
+                401: "API key rejected — check ANTHROPIC_API_KEY or rerun forge init",
+                403: "API key lacks access — check your Anthropic account/plan",
+                404: f"model '{self.model}' not found — check FORGE_MODEL",
+                429: "rate limited — wait a minute and retry",
+                529: "Anthropic API overloaded — retry shortly",
+            }
+            hint = hints.get(e.code, "see https://docs.anthropic.com/en/api/errors")
+            raise RuntimeError(f"Anthropic API error HTTP {e.code}: {hint}") from None
+        except urllib.error.URLError:
+            raise RuntimeError("could not reach api.anthropic.com — check your "
+                               "network, or use FORGE_ENGINE=ollama") from None
+        text = "".join(b.get("text", "") for b in data.get("content", []))
+        text = THINK_RE.sub("", text).strip()
+        if as_json:
+            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
+        return text
 
 
 class Stub:
@@ -45,7 +128,11 @@ class Stub:
     parseable content so behavior is testable byte-for-byte.
     """
 
+    name = "stub"
     model = "stub"
+
+    def healthy(self) -> tuple[bool, str]:
+        return (True, "stub is always available (offline demo mode)")
 
     def ask(self, prompt: str, as_json: bool = False) -> str:
         if '"concepts"' in prompt:
@@ -80,27 +167,17 @@ def _available_models() -> list[str]:
 
 
 def get_llm():
-    if os.environ.get("FORGE_STUB"):
-        return Stub()
-    try:
-        models = _available_models()
-        if not models:
-            return Stub()
-        # prefer instruct/coder models over reasoning models for structured JSON
-        pick = os.environ.get("FORGE_MODEL") or next(
-            (m for m in models if any(k in m for k in ("coder", "llama", "qwen", "mistral"))),
-            models[0],
-        )
-        return Ollama(pick)
-    except Exception:
-        return Stub()
+    from . import config
+    return config.resolve_engine()
 
 
 def get_grader():
     """Model used only for grading answers. Defaults to the teaching model;
     set FORGE_GRADER (e.g. to a reasoning model like deepseek-r1) for stricter
-    evaluation at the cost of latency."""
+    evaluation at the cost of latency. The model id applies to whichever
+    engine type get_llm() resolved (Ollama or Anthropic)."""
+    llm = get_llm()
     pick = os.environ.get("FORGE_GRADER")
-    if pick and not os.environ.get("FORGE_STUB"):
-        return Ollama(pick)
-    return get_llm()
+    if pick and llm.name != "stub":
+        return type(llm)(pick)
+    return llm

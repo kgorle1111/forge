@@ -1021,6 +1021,207 @@ def test_web_dashboard():
     server.shutdown()
 
 
+# === WS-ENGINE ===
+import http.server  # noqa: E402
+import stat  # noqa: E402
+from contextlib import contextmanager  # noqa: E402
+
+from forge import config as forge_config  # noqa: E402
+from forge import llm as forge_llm  # noqa: E402
+from forge.llm import AnthropicEngine, Ollama  # noqa: E402
+from forge.llm import get_grader as _get_grader  # noqa: E402
+
+_FAKE_KEY = "sk-ant-test-XYZZY-not-a-real-key"
+_ENGINE_VARS = ("FORGE_STUB", "FORGE_ENGINE", "FORGE_MODEL", "FORGE_CONFIG",
+                "ANTHROPIC_API_KEY", "FORGE_ANTHROPIC_URL", "FORGE_GRADER")
+
+
+@contextmanager
+def _engine_env(**vals):
+    saved = {k: os.environ.get(k) for k in _ENGINE_VARS}
+    saved_url = forge_llm.OLLAMA_URL
+    try:
+        for k in _ENGINE_VARS:
+            os.environ.pop(k, None)
+        for k, v in vals.items():
+            os.environ[k] = v
+        forge_llm.OLLAMA_URL = "http://127.0.0.1:9"  # dead port by default
+        yield
+    finally:
+        forge_llm.OLLAMA_URL = saved_url
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+class _MockAPI(http.server.BaseHTTPRequestHandler):
+    mode = "ok"  # "ok" | "401"
+    last = {}
+
+    def log_message(self, *args):
+        pass
+
+    def _send(self, code, payload=None):
+        body = json.dumps(payload or {}).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/api/tags":
+            self._send(200, {"models": [{"name": "llama3"}]})
+        else:
+            self._send(404)
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        _MockAPI.last = {
+            "path": self.path,
+            "key": self.headers.get("x-api-key"),
+            "version": self.headers.get("anthropic-version"),
+            "body": json.loads(self.rfile.read(n)),
+        }
+        if _MockAPI.mode == "401":
+            self._send(401, {"error": {"type": "authentication_error"}})
+            return
+        self._send(200, {"content": [
+            {"type": "text", "text": "```json\n{\"answer\": 42}\n```"}]})
+
+
+@contextmanager
+def _mock_server():
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _MockAPI)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}"
+    finally:
+        srv.shutdown()
+
+
+def test_ws_engine_resolution_order():
+    cfg = os.path.join(tempfile.mkdtemp(), "config.json")
+    # rung 1: FORGE_STUB wins over everything
+    with _engine_env(FORGE_STUB="1", FORGE_ENGINE="anthropic", FORGE_CONFIG=cfg):
+        assert get_llm().name == "stub"
+    # rung 2: FORGE_ENGINE explicit — honored, and hard-fails when unhealthy
+    with _engine_env(FORGE_ENGINE="stub", FORGE_CONFIG=cfg):
+        assert get_llm().name == "stub"
+    with _engine_env(FORGE_ENGINE="anthropic", FORGE_CONFIG=cfg):
+        try:
+            get_llm()
+            raise AssertionError("expected RuntimeError for missing key")
+        except RuntimeError as e:
+            assert "ANTHROPIC_API_KEY" in str(e)
+    with _engine_env(FORGE_ENGINE="ollama", FORGE_CONFIG=cfg):
+        try:
+            get_llm()
+            raise AssertionError("expected RuntimeError for dead ollama")
+        except RuntimeError as e:
+            assert "ollama serve" in str(e)
+    # rung 3: config file engine — same hard behavior, resolves when healthy
+    with _engine_env(FORGE_CONFIG=cfg, ANTHROPIC_API_KEY=_FAKE_KEY):
+        forge_config.save({"engine": "anthropic", "model": None,
+                           "api_key_env": "ANTHROPIC_API_KEY"})
+        llm = get_llm()
+        assert llm.name == "anthropic"
+        assert llm.model == "claude-haiku-4-5-20251001"
+    os.remove(cfg)
+    # rung 4: auto — Ollama reachable wins
+    with _engine_env(FORGE_CONFIG=cfg), _mock_server() as url:
+        forge_llm.OLLAMA_URL = url
+        llm = get_llm()
+        assert llm.name == "ollama" and llm.model == "llama3"
+        ok, msg = llm.healthy()
+        assert ok, msg
+    # rung 5: auto — no Ollama, Anthropic key present
+    with _engine_env(FORGE_CONFIG=cfg, ANTHROPIC_API_KEY=_FAKE_KEY):
+        assert get_llm().name == "anthropic"
+    # rung 6: auto — nothing available -> Stub, never crashes
+    with _engine_env(FORGE_CONFIG=cfg):
+        llm = get_llm()
+        assert llm.name == "stub"
+        assert llm.healthy()[0] is True
+
+
+def test_ws_engine_healthy_messages():
+    with _engine_env():
+        ok, msg = Ollama("llama3").healthy()
+        assert ok is False and "ollama serve" in msg
+        ok, msg = AnthropicEngine().healthy()
+        assert ok is False and "ANTHROPIC_API_KEY" in msg
+    with _engine_env(ANTHROPIC_API_KEY=_FAKE_KEY):
+        ok, msg = AnthropicEngine().healthy()
+        assert ok is True and _FAKE_KEY not in msg
+
+
+def test_ws_engine_anthropic_request_shape():
+    _MockAPI.mode = "ok"
+    with _mock_server() as url, _engine_env(
+            ANTHROPIC_API_KEY=_FAKE_KEY, FORGE_ANTHROPIC_URL=url):
+        out = AnthropicEngine().ask("hello engine", as_json=True)
+        assert out == '{"answer": 42}'  # fences stripped, parses clean
+        assert json.loads(out) == {"answer": 42}
+        last = _MockAPI.last
+        assert last["path"] == "/v1/messages"
+        assert last["key"] == _FAKE_KEY
+        assert last["version"] == "2023-06-01"
+        body = last["body"]
+        assert body["model"] == "claude-haiku-4-5-20251001"
+        assert body["max_tokens"] == 4096 and body["temperature"] == 0.4
+        content = body["messages"][0]["content"]
+        assert "hello engine" in content
+        assert "ONLY valid JSON" in content
+
+
+def test_ws_engine_error_is_prescriptive_and_keyless():
+    _MockAPI.mode = "401"
+    try:
+        with _mock_server() as url, _engine_env(
+                ANTHROPIC_API_KEY=_FAKE_KEY, FORGE_ANTHROPIC_URL=url):
+            try:
+                AnthropicEngine().ask("hi")
+                raise AssertionError("expected RuntimeError on 401")
+            except RuntimeError as e:
+                msg = str(e)
+                assert "API key rejected" in msg and "forge init" in msg
+                assert _FAKE_KEY not in msg
+    finally:
+        _MockAPI.mode = "ok"
+
+
+def test_ws_engine_config_save_mode_and_key_lookup():
+    cfg = os.path.join(tempfile.mkdtemp(), "config.json")
+    with _engine_env(FORGE_CONFIG=cfg, ANTHROPIC_API_KEY="env-key"):
+        path = forge_config.save({"engine": "stub", "model": None,
+                                  "api_key_env": "ANTHROPIC_API_KEY"})
+        assert path == cfg
+        assert stat.S_IMODE(os.stat(cfg).st_mode) == 0o600
+        loaded = forge_config.load()
+        assert loaded["engine"] == "stub"
+        # env key via api_key_env
+        assert forge_config.api_key() == "env-key"
+        # explicit config key wins over env; save preserves it
+        forge_config.save({**loaded, "api_key": "cfg-key"})
+        assert forge_config.api_key() == "cfg-key"
+        assert forge_config.load()["api_key"] == "cfg-key"
+    # missing/corrupt file -> {} not crash
+    with _engine_env(FORGE_CONFIG=cfg + ".missing"):
+        assert forge_config.load() == {}
+
+
+def test_ws_engine_grader_follows_engine_type():
+    with _engine_env(FORGE_STUB="1", FORGE_GRADER="whatever"):
+        assert _get_grader().name == "stub"  # stub ignores FORGE_GRADER
+    with _engine_env(FORGE_ENGINE="anthropic", ANTHROPIC_API_KEY=_FAKE_KEY,
+                     FORGE_GRADER="claude-opus-x"):
+        grader = _get_grader()
+        assert grader.name == "anthropic" and grader.model == "claude-opus-x"
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()
