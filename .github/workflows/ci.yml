@@ -42,7 +42,7 @@ jobs:
       - name: Install wheel in clean venv and smoke test
         run: |
           uv venv /tmp/venv
-          /tmp/venv/bin/pip install dist/*.whl
+          uv pip install --python /tmp/venv/bin/python dist/*.whl
           export PATH=/tmp/venv/bin:$PATH
           FORGE_STUB=1 forge doctor
           python -c "from importlib.resources import files; assert (files('forge')/'dashboard.html').is_file()"
