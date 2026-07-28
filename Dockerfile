@@ -9,7 +9,7 @@ COPY evals/ evals/
 # evals/ must sit next to the installed package (forge/evals.py resolves
 # EVALS_DIR relative to forge/__file__) so `forge eval` works in-container
 RUN pip install --no-cache-dir . \
-    && cp -r evals "$(python -c 'import forge, pathlib; print(pathlib.Path(forge.__file__).resolve().parent.parent)')/evals" \
+    && cp -r evals "$(cd / && python -c 'import forge, pathlib; print(pathlib.Path(forge.__file__).resolve().parent.parent)')/evals" \
     && rm -rf /src
 
 ENV FORGE_DB=/data/forge.db \
