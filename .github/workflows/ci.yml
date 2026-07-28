@@ -61,6 +61,24 @@ jobs:
           path: dist/*
           retention-days: 7
 
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t forge .
+      - name: Smoke test container
+        run: |
+          docker run -d --name forge -e FORGE_STUB=1 -p 8765:8765 forge
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8765/ || true)
+            [ "$code" = "200" ] && break
+            sleep 0.5
+          done
+          [ "$code" = "200" ] || { echo "container returned $code"; docker logs forge; exit 1; }
+          curl -s http://localhost:8765/ | grep -q "The Forge" || { echo "body missing 'The Forge'"; exit 1; }
+          docker rm -f forge
+
   qa:
     needs: test
     runs-on: ubuntu-latest

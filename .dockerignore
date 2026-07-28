@@ -1,0 +1,16 @@
+.venv
+.git
+dist
+__pycache__
+**/__pycache__
+*.db
+.claude
+CLAUDE.md
+AGENTS.md
+NEXT_AGENT.md
+IDEAS.md
+MORE_IDEAS.md
+BUILD.md
+ROADMAP.md
+NOT-BUILT-YET.md
+forge_learning.egg-info

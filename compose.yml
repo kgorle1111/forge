@@ -1,0 +1,21 @@
+services:
+  forge:
+    build: .
+    ports:
+      - "8765:8765"
+    volumes:
+      - forge-data:/data
+    environment:
+      FORGE_ENGINE: ollama
+      FORGE_OLLAMA: http://ollama:11434
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama
+    volumes:
+      - ollama-models:/root/.ollama
+
+volumes:
+  forge-data:
+  ollama-models:

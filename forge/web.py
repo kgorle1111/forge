@@ -264,9 +264,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(port: int = 8765, learner: str | None = None):
+    """FORGE_BIND overrides the bind address (containers); non-default values
+    expose the server beyond localhost — the Host allowlist still applies."""
     select_profile(learner)
+    host = os.environ.get("FORGE_BIND", "127.0.0.1")
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        server = ThreadingHTTPServer((host, port), Handler)
     except OSError as e:
         raise SystemExit(
             f"[Forge] port {port} is already in use — is another Forge running? "

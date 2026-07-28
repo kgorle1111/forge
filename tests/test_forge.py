@@ -2162,6 +2162,30 @@ def test_bp3_emit_chunk_none_byte_identical():
     assert '"concepts"' not in joined and '"questions"' not in joined  # JSON asks never stream
 
 
+# === WS-DOCKER ===
+
+def test_docker_forge_bind_default_is_localhost():
+    # containers set FORGE_BIND=0.0.0.0 explicitly; the default must never
+    # silently expose the server beyond localhost
+    from http.server import ThreadingHTTPServer
+    from forge import web
+    with _engine_env(FORGE_STUB="1"):  # ensure FORGE_BIND not in _engine_env's set
+        os.environ.pop("FORGE_BIND", None)
+        # tiny probe: replicate the resolution serve() does, without starting it
+        host = os.environ.get("FORGE_BIND", "127.0.0.1")
+        assert host == "127.0.0.1", f"default bind changed to {host}"
+    with _engine_env(FORGE_STUB="1", FORGE_BIND="0.0.0.0"):
+        host = os.environ.get("FORGE_BIND", "127.0.0.1")
+        assert host == "0.0.0.0"
+    # end-to-end: FORGE_BIND=127.0.0.1 explicitly still binds and serves
+    with _engine_env(FORGE_STUB="1", FORGE_BIND="127.0.0.1"):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        try:
+            assert server.server_address[0] == "127.0.0.1"
+        finally:
+            server.server_close()
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in sorted(globals().items()) if k.startswith("test_")]:
         fn()

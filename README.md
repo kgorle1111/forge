@@ -64,6 +64,31 @@ uvx forge-learning web
 uv tool install forge-learning && forge init
 ```
 
+## Docker
+
+```bash
+docker compose up -d                          # forge + ollama
+docker compose exec ollama ollama pull llama3.2   # required once: FORGE_ENGINE=ollama hard-fails with no model
+open http://localhost:8765
+```
+
+No Ollama model yet and just want to click around? Run the stub engine alone:
+
+```bash
+docker build -t forge .
+docker run --rm -p 8765:8765 -e FORGE_STUB=1 forge
+```
+
+Notes:
+
+- Data persists in the `forge-data` volume (`/data/forge.db`); models in `ollama-models`.
+- Access it as `http://localhost:8765`. The dashboard rejects non-localhost
+  hostnames by design (Host-header allowlist, DNS-rebinding guard) — a
+  docker-published port reached as `localhost` passes because the browser
+  sends `Host: localhost:8765`.
+- The container binds `0.0.0.0` via `FORGE_BIND`; outside Docker the server
+  stays on `127.0.0.1`.
+
 ## Choosing your engine
 
 - **Local Ollama** — private and free. Install [Ollama](https://ollama.com),
