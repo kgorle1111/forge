@@ -58,7 +58,8 @@ def run_topic(topic: str, ask, emit=print, llm=None, memory=None,
               max_failed_attempts: int = 0, source: str = "",
               grader=None, correct_lessons: bool = False,
               source_manifest: dict | None = None,
-              emit_chunk=None) -> ForgeState:
+              emit_chunk=None,
+              language: str | None = None) -> ForgeState:
     graph = build_graph()
     base_llm = llm or get_llm()
     config = {
@@ -83,6 +84,7 @@ def run_topic(topic: str, ask, emit=print, llm=None, memory=None,
         "missed": [],
         "source_material": source,
         "source_manifest": source_manifest or {},
+        "language": language,
         "failed_attempts": 0,
         "max_failed_attempts": max_failed_attempts,
         "mastery_level": 0.0,

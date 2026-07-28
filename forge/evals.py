@@ -50,6 +50,13 @@ CORPUS = [
     ("source-easement-value", "easement valuation",
      ("An easement's value is the difference between the property value "
       "before and after the encumbrance, supported by paired sales.")),
+    # WS-LANG: experimental — stub still emits canned English, but the
+    # LANGUAGE_LINE must reach every one of the 4 prompt sites (curriculum,
+    # lesson, quiz, grade). Real-language quality is H9.
+    ("lang-es-fractions", "fracciones basicas", None, "Spanish"),
+    ("lang-es-verbos", "verbos regulares", None, "Spanish"),
+    ("lang-hi-multiplication", "गुणा (multiplication tables)", None, "Hindi"),
+    ("lang-hi-water-cycle", "जल चक्र (water cycle)", None, "Hindi"),
 ]
 
 GRADING_BANDS = [
@@ -77,8 +84,10 @@ class _Capture(Stub):
 
     def __init__(self):
         self.concepts, self.lessons, self.quizzes = [], [], []
+        self.prompts: list[str] = []  # WS-LANG: needed to prove LANGUAGE_LINE reaches every call
 
     def ask(self, prompt, as_json=False):
+        self.prompts.append(prompt)
         out = super().ask(prompt, as_json)
         if '"concepts"' in prompt:
             self.concepts = json.loads(out)["concepts"]
@@ -94,7 +103,8 @@ def replay(record: dict) -> tuple[_Capture, list[str]]:
     cap, events = _Capture(), []
     run_topic(record["topic"], ask=lambda _p: PASS_ANSWER, emit=events.append,
               llm=cap, grader=cap, memory=Memory(":memory:"),
-              source=record.get("source") or "")
+              source=record.get("source") or "",
+              language=record.get("language"))  # WS-LANG: None = existing behavior
     return cap, events
 
 
@@ -152,6 +162,16 @@ def check_record(record: dict, cap: _Capture | None = None) -> dict[str, tuple[b
             out_of_band.append(f"{g['answer']!r}->{score:.2f} not in [{lo},{hi}]")
     results["grading"] = (not out_of_band,
                           "ok" if not out_of_band else "; ".join(out_of_band))
+
+    # WS-LANG: only asserted for records that declare a language; proves the
+    # LANGUAGE_LINE reaches EVERY prompt (curriculum, lesson, quiz, grade)
+    if record.get("language"):
+        expected = f"in {record['language']}."
+        missing = [i for i, p in enumerate(cap.prompts) if expected not in p]
+        results["language"] = (not missing,
+                               "ok" if not missing
+                               else f"language line missing from prompts {missing}")
+
     return results
 
 
@@ -233,9 +253,13 @@ def judge_agreement(judged: list[dict]) -> dict:
 def regenerate() -> int:
     """Rebuild evals/golden/*.json by running the stub loop — reproducible."""
     GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
-    for name, topic, source in CORPUS:
+    for item in CORPUS:
+        name, topic, source = item[0], item[1], item[2]
+        language = item[3] if len(item) > 3 else None
         record = {"topic": topic, "source": source, "session": [],
                   "checks": CHECKS}
+        if language:
+            record["language"] = language
         _cap, events = replay(record)
         record["session"] = events
         with open(GOLDEN_DIR / f"{name}.json", "w", encoding="utf-8") as f:

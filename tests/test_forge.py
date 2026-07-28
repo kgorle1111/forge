@@ -2162,6 +2162,86 @@ def test_bp3_emit_chunk_none_byte_identical():
     assert '"concepts"' not in joined and '"questions"' not in joined  # JSON asks never stream
 
 
+# === WS-LANG ===
+
+def test_lang_none_prompts_unchanged():
+    # byte-identical when language is None: LANGUAGE_LINE must NOT appear anywhere
+    from forge import agents
+    cap = _CapturePrompts()
+    run_topic("english topic", ask=lambda _p: "remember alpha beta gamma",
+              emit=lambda *_: None, llm=cap, grader=cap,
+              memory=Memory(":memory:"), language=None)
+    assert all("Teach, quiz, and give feedback entirely in" not in p for p in cap.prompts)
+    # sanity: the constant helper returns "" for falsy input
+    assert agents._lang(None) == "" == agents._lang("") == agents._lang({})
+
+
+def test_lang_line_reaches_every_prompt():
+    # curriculum + lesson + quiz + grade prompts all carry the language line
+    llm_cap, grader_cap = _CapturePrompts(), _CapturePrompts()
+    grader_cap.name = "ollama"  # unlock grade() LLM path; canned Stub answers still parse
+    run_topic("test topic", ask=lambda _p: "remember alpha beta gamma",
+              emit=lambda *_: None, llm=llm_cap, grader=grader_cap,
+              memory=Memory(":memory:"), language="Spanish")
+    expected = "Teach, quiz, and give feedback entirely in Spanish."
+    by_kind = {"concepts": [], "lesson": [], "questions": []}
+    for p in llm_cap.prompts:
+        if '"concepts"' in p:
+            by_kind["concepts"].append(p)
+        elif '"questions"' in p:
+            by_kind["questions"].append(p)
+        else:
+            by_kind["lesson"].append(p)
+    grade_prompts = [p for p in grader_cap.prompts if '"score"' in p]
+    for kind, ps in {**by_kind, "grade": grade_prompts}.items():
+        assert ps, f"no {kind} prompts captured"
+        for p in ps:
+            assert expected in p, f"{kind} prompt missing LANGUAGE_LINE: {p[:120]}..."
+
+
+def test_lang_tokenizer_handles_unicode():
+    # the OLD [a-z0-9]+ tokenizer dropped ALL non-Latin text, deadlocking
+    # Hindi learners at the mastery gate. \w+ unicode-aware fixes it.
+    from forge.agents import heuristic_grade
+    # Spanish diacritics
+    assert heuristic_grade("acción y reacción", ["acción reacción"]) == 1.0
+    # Hindi key points hit by a Hindi answer
+    assert heuristic_grade("जल चक्र सौर ऊर्जा", ["जल चक्र", "सौर ऊर्जा"]) == 1.0
+    # Hindi keypoints, empty answer -> score 0 (gate stays honest)
+    assert heuristic_grade("", ["जल चक्र", "सौर ऊर्जा"]) == 0.0
+    # existing English behavior byte-identical: full match on the seeded answer
+    assert heuristic_grade("remember alpha beta gamma", ["alpha", "beta", "gamma"]) == 1.0
+    # single-letter non-ASCII token accepted (Devanagari words can be short)
+    assert heuristic_grade("क", ["क"]) == 1.0
+
+
+def test_lang_cli_flag_threads_through():
+    # --language on `forge learn` reaches run_topic -> state["language"]
+    import subprocess
+    tmp = tempfile.mkdtemp()
+    env = {**os.environ, "FORGE_STUB": "1",
+           "FORGE_DB": os.path.join(tmp, "cli-lang.db"),
+           "FORGE_CONFIG": os.path.join(tmp, "cli-lang.json")}
+    # scripted answers via stdin — the stub loop needs 6 lines
+    proc = subprocess.run(
+        [".venv/bin/forge", "learn", "diagnostics",
+         "--language", "Spanish", "--max-failures", "1"],
+        input="alpha beta gamma\n" * 20, text=True, capture_output=True,
+        env=env, timeout=60)
+    assert "language: Spanish (experimental)" in proc.stdout
+
+
+class _CapturePrompts(Stub):
+    """Stub that also records every prompt the loop sent."""
+
+    def __init__(self):
+        self.prompts: list[str] = []
+
+    def ask(self, prompt, as_json=False):
+        self.prompts.append(prompt)
+        return super().ask(prompt, as_json)
+
+
 # === WS-DOCKER ===
 
 def test_docker_forge_bind_default_is_localhost():

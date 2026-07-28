@@ -45,6 +45,17 @@ GRADE = (
     'Reply as JSON: {{"score": 0.0, "feedback": "one sentence"}}'
 )
 
+# WS-LANG: applied ONLY when a language is set. None -> "" -> byte-identical
+# to today (existing golden corpus and stub transcripts stay untouched).
+LANGUAGE_LINE = "\nTeach, quiz, and give feedback entirely in {language}."
+
+
+def _lang(state_or_language) -> str:
+    """Return the language suffix to append to a prompt, or '' for None."""
+    lang = (state_or_language.get("language")
+            if isinstance(state_or_language, dict) else state_or_language)
+    return LANGUAGE_LINE.format(language=lang) if lang else ""
+
 
 def _json(text: str) -> dict:
     m = re.search(r"\{.*\}", text, re.S)
@@ -55,10 +66,21 @@ def heuristic_detail(answer: str, key_points: list[str]) -> tuple[float, list[st
     """Deterministic grading: (fraction of key points hit, the ones missed)."""
     if not key_points:
         return 0.0, []
-    ans = set(re.findall(r"[a-z0-9]+", answer.lower()))
+    # WS-LANG: unicode-aware tokenizer — the old [a-z0-9]+ dropped ALL
+    # non-Latin script (Hindi/Chinese/Arabic key points would match nothing
+    # and deadlock the mastery gate). \w with re.UNICODE covers Latin+CJK+
+    # Devanagari+Arabic; keep len>2 for ASCII words, accept short non-ASCII
+    # tokens which are semantically full words in many scripts.
+    def _toks(text: str) -> list[str]:
+        return re.findall(r"\w+", text.lower(), flags=re.UNICODE)
+
+    def _keep(w: str) -> bool:
+        return len(w) > 2 or any(ord(c) > 127 for c in w)
+
+    ans = set(_toks(answer))
     missed = []
     for kp in key_points:
-        words = [w for w in re.findall(r"[a-z0-9]+", kp.lower()) if len(w) > 2]
+        words = [w for w in _toks(kp) if _keep(w)]
         if not (words and sum(w in ans for w in words) / len(words) >= 0.6):
             missed.append(kp)
     return (len(key_points) - len(missed)) / len(key_points), missed
@@ -68,7 +90,8 @@ def heuristic_grade(answer: str, key_points: list[str]) -> float:
     return heuristic_detail(answer, key_points)[0]
 
 
-def grade(llm, question: str, key_points: list[str], answer: str) -> dict:
+def grade(llm, question: str, key_points: list[str], answer: str,
+          language: str | None = None) -> dict:
     """Returns {"score", "missed", "feedback"}. LLM refines the score and adds
     feedback when available; the heuristic is always the floor and never lets a
     dead model open the gate."""
@@ -77,8 +100,8 @@ def grade(llm, question: str, key_points: list[str], answer: str) -> dict:
     # any real model may refine (ollama or anthropic); stub never does
     if getattr(llm, "name", "") != "stub":
         try:
-            j = _json(llm.ask(GRADE.format(q=question, kp=key_points, a=answer),
-                              as_json=True))
+            j = _json(llm.ask(GRADE.format(q=question, kp=key_points, a=answer)
+                              + _lang(language), as_json=True))
             score = min(1.0, max(0.0, float(j["score"])))
             feedback = str(j.get("feedback", ""))[:240]
         except Exception:
@@ -121,7 +144,8 @@ def synthesizer(state, config):
                  f"{out['concept_idx'] + 1}/{len(out['concepts'])}.")
         else:
             raw = _json(llm.ask(SYNTH_CONCEPTS.format(topic=topic)
-                                + _source_block(state, topic), as_json=True))
+                                + _source_block(state, topic)
+                                + _lang(state), as_json=True))
             out["concepts"] = raw["concepts"]
             out["concept_idx"] = 0
             memory.save_progress(topic, out["concepts"], 0)
@@ -137,7 +161,8 @@ def synthesizer(state, config):
              "Address those points head-on." if missed else "")
     lesson = llm.ask(SYNTH_LESSON.format(name=c["name"], topic=topic,
                                          summary=c["summary"], angle=angle)
-                     + focus + _source_block(state, f"{c['name']} {c['summary']}"))
+                     + focus + _source_block(state, f"{c['name']} {c['summary']}")
+                     + _lang(state))
     emit(f"\n-- Concept {idx + 1}/{len(concepts)}: {c['name']} [angle: {angle.split(':')[0]}] --")
     emit(lesson)
     out["lesson"] = lesson
@@ -152,7 +177,8 @@ def inquisitor(state, config):
     cfg = config["configurable"]
     llm, emit, ask, memory = cfg["llm"], cfg["emit"], cfg["ask"], cfg["memory"]
     c = state["concepts"][state["concept_idx"]]
-    qs = _json(llm.ask(QUIZ.format(name=c["name"], lesson=state["lesson"]),
+    qs = _json(llm.ask(QUIZ.format(name=c["name"], lesson=state["lesson"])
+                       + _lang(state),
                        as_json=True))["questions"]
     # interleaving: resurface the historically weakest concept from other topics.
     # It grades and reschedules THAT concept — it never gates the current one,
@@ -181,7 +207,8 @@ def evaluator(state, config):
     grader = cfg.get("grader") or cfg["llm"]
     gate_scores, all_missed, qn = [], [], 0
     for q, a in zip(state["questions"], state["answers"]):
-        g = grade(grader, q["prompt"], q["key_points"], a)
+        g = grade(grader, q["prompt"], q["key_points"], a,
+                  language=state.get("language"))
         if "interleaved" in q:
             w = q["interleaved"]
             entry = memory.record(w["topic"], w["concept"], g["score"],

@@ -27,6 +27,7 @@ class ForgeState(TypedDict, total=False):
     mastery: bool                  # True only when every concept is passed
     missed: list[str]              # key points flunked last quiz -> targeted re-teach
     source_material: str           # optional user document the curriculum is built from
+    language: str                  # WS-LANG: target teaching language; None/absent = existing behavior
     source_manifest: dict          # source docs split into citeable local chunks
     failed_attempts: int
     max_failed_attempts: int       # 0 = never give up (the mandate)

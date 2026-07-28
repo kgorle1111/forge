@@ -1,0 +1,82 @@
+{
+  "checks": {
+    "curriculum": {
+      "max_concepts": 5,
+      "required_concepts": [
+        "foundations",
+        "mechanics",
+        "applications"
+      ]
+    },
+    "grading": [
+      {
+        "answer": "remember alpha beta gamma",
+        "expected_band": [
+          1.0,
+          1.0
+        ]
+      },
+      {
+        "answer": "only alpha here",
+        "expected_band": [
+          0.32,
+          0.35
+        ]
+      },
+      {
+        "answer": "alpha and beta together",
+        "expected_band": [
+          0.65,
+          0.68
+        ]
+      },
+      {
+        "answer": "no idea at all",
+        "expected_band": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "lesson": {
+      "required_markers": [
+        "LESSON[",
+        "alpha beta gamma"
+      ]
+    },
+    "quiz": {
+      "min_term_overlap": 1.0
+    }
+  },
+  "language": "Hindi",
+  "session": [
+    "\n== Curriculum for '\u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle)' ==",
+    "  1. \u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): foundations \u2014 core definitions of \u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle)",
+    "  2. \u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): mechanics \u2014 how \u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle) works step by step",
+    "  3. \u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): applications \u2014 where \u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle) is used and why",
+    "\n-- Concept 1/3: \u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): foundations [angle: first principles] --",
+    "LESSON[\u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): foundations|first]: remember alpha beta gamma.",
+    "\n** Active recall \u2014 the lesson is gone. Reconstruct it. **",
+    "[Evaluator] Q1: 1.00",
+    "[Evaluator] Q2: 1.00",
+    "\n[Evaluator] PASS \u2014 score 1.00. Mastery advancing.",
+    "[Orchestrator] '\u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): foundations' scheduled for review in 1.0 day(s).",
+    "\n-- Concept 2/3: \u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): mechanics [angle: first principles] --",
+    "LESSON[\u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): mechanics|first]: remember alpha beta gamma.",
+    "\n** Active recall \u2014 the lesson is gone. Reconstruct it. **",
+    "[Evaluator] Q1: 1.00",
+    "[Evaluator] Q2: 1.00",
+    "\n[Evaluator] PASS \u2014 score 1.00. Mastery advancing.",
+    "[Orchestrator] '\u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): mechanics' scheduled for review in 1.0 day(s).",
+    "\n-- Concept 3/3: \u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): applications [angle: first principles] --",
+    "LESSON[\u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): applications|first]: remember alpha beta gamma.",
+    "\n** Active recall \u2014 the lesson is gone. Reconstruct it. **",
+    "[Evaluator] Q1: 1.00",
+    "[Evaluator] Q2: 1.00",
+    "\n[Evaluator] PASS \u2014 score 1.00. Mastery advancing.",
+    "[Orchestrator] '\u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle): applications' scheduled for review in 1.0 day(s).",
+    "\n== TOPIC MASTERED: \u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle) (mastery level 1.00) =="
+  ],
+  "source": null,
+  "topic": "\u091c\u0932 \u091a\u0915\u094d\u0930 (water cycle)"
+}

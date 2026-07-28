@@ -218,6 +218,11 @@ Engine resolution order: `FORGE_STUB` → `FORGE_ENGINE` → the config file's
 The config file also accepts `{"models": {"teach": ..., "grade": ...}}` to
 right-size models per stage (env vars win when set). Lessons stream
 token-by-token into the dashboard as they generate.
+
+`forge learn --language <lang>` teaches, quizzes, and grades in a target
+language (or set `"language"` in the config file). Experimental: `es`, `hi`
+ship as scaffolded — the eval harness proves the language line reaches every
+prompt; real-model quality parity waits on H9.
 | `FORGE_DB` | `~/.forge/forge.db` | memory file |
 | `FORGE_STUB` | unset | `1` = no-LLM demo/offline mode |
 

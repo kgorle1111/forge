@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 
+from . import config
 from .config import config_path
 from .graph import run_review, run_topic
 from .graphview import export
@@ -117,9 +118,13 @@ def cmd_learn(args):
               f"{chunks} chunk(s), {len(source)} chars")
     emit, ask = _io(args.speak, args.voice, args.push_to_talk,
                    args.cleanup_dictation, args.readback)
+    language = getattr(args, "language", None) or config.load().get("language")
+    if language:
+        print(f"[Forge] language: {language} (experimental)")
     final = run_topic(args.topic, ask=ask, emit=emit, llm=llm,
                       max_failed_attempts=args.max_failures, source=source,
-                      source_manifest=manifest, correct_lessons=args.correct)
+                      source_manifest=manifest, correct_lessons=args.correct,
+                      language=language)
     if not final.get("mastery"):
         print("\n[Forge] Halted before mastery (failure cap hit). "
               "The topic stays on your schedule.")
@@ -1237,6 +1242,8 @@ def main(argv=None):
     learn.add_argument("--from", dest="source", metavar="FILE", action="append",
                        default=[],
                        help="ground the curriculum in a local text/markdown/PDF file; repeatable")
+    learn.add_argument("--language", metavar="LANG",
+                       help="teach, quiz and grade in this language (experimental: es, hi)")
     learn.add_argument("--speak", action="store_true",
                        help="read lessons and questions aloud (macOS)")
     learn.add_argument("--voice", default="",
