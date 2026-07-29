@@ -1002,8 +1002,9 @@ def cmd_doctor(args):
     print(f"pdftotext: {pdf}")
     if getattr(args, "full", False):
         from .voice import voice_status
-        for name, ok, msg in voice_status():
-            mark = "ok" if ok else "missing"
+        # careful: don't shadow the outer `ok` (engine health drives exit code)
+        for name, vok, msg in voice_status():
+            mark = "ok" if vok else "missing"
             print(f"voice {name}: {mark} — {msg}")
     if full:
         db_bytes = (os.path.getsize(m.path)
