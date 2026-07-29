@@ -1047,6 +1047,90 @@ class Memory:
             FROM cards c LEFT JOIN attempts a ON a.card_id = c.id
             GROUP BY c.id ORDER BY c.topic, c.id""").fetchall()
 
+    def session_receipt(self, hours: float = 6.0) -> dict:
+        """WS-DEMO: printable receipt of the most recent session window.
+
+        A "session" here = attempts landed in the last `hours` hours; the
+        product owns no session id, so we use a time window. All data comes
+        from existing cards/attempts tables — no schema change.
+        """
+        now = time.time()
+        cutoff = now - hours * 3600
+        rows = self.db.execute("""
+            SELECT a.ts, a.score, c.topic, c.concept, c.due, c.interval_days,
+                   c.reps, c.lapses
+            FROM attempts a JOIN cards c ON c.id = a.card_id
+            WHERE a.ts >= ? ORDER BY a.ts""", (cutoff,)).fetchall()
+        if not rows:
+            return {"empty": True, "hours": hours}
+        seen: dict[tuple, dict] = {}
+        for r in rows:
+            k = (r["topic"], r["concept"])
+            d = seen.setdefault(k, {"topic": r["topic"], "concept": r["concept"],
+                                    "attempts": 0, "scores": [], "mastered": False,
+                                    "next_due": r["due"], "reps": r["reps"],
+                                    "lapses": r["lapses"]})
+            d["attempts"] += 1
+            d["scores"].append(r["score"])
+        concepts = []
+        for d in seen.values():
+            avg = sum(d["scores"]) / len(d["scores"])
+            best = max(d["scores"])
+            d["mastered"] = best >= 0.8
+            d["avg_score"] = round(avg, 2)
+            d["best_score"] = round(best, 2)
+            d["next_due_days"] = round((d["next_due"] - now) / DAY, 1)
+            concepts.append(d)
+        weakest = min(concepts, key=lambda c: c["best_score"])
+        first_ts = rows[0]["ts"]
+        last_ts = rows[-1]["ts"]
+        return {
+            "empty": False,
+            "started_at": first_ts,
+            "ended_at": last_ts,
+            "minutes": round((last_ts - first_ts) / 60, 1),
+            "attempted": len(concepts),
+            "mastered": sum(1 for c in concepts if c["mastered"]),
+            "trapped": sum(1 for c in concepts if not c["mastered"]),
+            "concepts": concepts,
+            "weakest": {"topic": weakest["topic"], "concept": weakest["concept"],
+                        "best_score": weakest["best_score"]},
+            "learner": os.environ.get("FORGE_LEARNER", "default"),
+        }
+
+    def curve_series(self, topic: str, concept: str,
+                     ahead_days: int = 30) -> dict:
+        """WS-DEMO: retrievability curve — one point per day between the last
+        review and +ahead_days, plus review-reset markers from attempts.
+        """
+        card = self.db.execute(
+            "SELECT * FROM cards WHERE topic=? AND concept=?",
+            (topic, concept)).fetchone()
+        if not card:
+            return {"points": [], "resets": []}
+        attempts = self.db.execute(
+            "SELECT ts, score FROM attempts WHERE card_id=? ORDER BY ts",
+            (card["id"],)).fetchall()
+        if not attempts:
+            return {"points": [], "resets": []}
+        last_ts = attempts[-1]["ts"]
+        interval = card["interval_days"]
+        due = card["due"]
+        end = last_ts + ahead_days * DAY
+        step = DAY
+        points = []
+        t = last_ts
+        while t <= end:
+            r = retrievability(interval, due, now=t)
+            if r is not None:
+                points.append({"t": t, "recall": round(r, 4)})
+            t += step
+        resets = [{"t": a["ts"], "score": a["score"]} for a in attempts]
+        return {"topic": topic, "concept": concept,
+                "points": points, "resets": resets,
+                "current_recall": retrievability(interval, due),
+                "interval_days": interval, "due": due}
+
     def _card_summary(self, row, now: float) -> dict:
         d = _rowdict(row)
         d["avg_score"] = d.get("avg_score") or 0.0

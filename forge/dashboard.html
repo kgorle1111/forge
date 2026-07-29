@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Forge</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#c9a35c">
 <style>
   :root {
     --bg0:#07080b; --bg1:#0c0e13; --panel:#10131a; --panel2:#131722;
@@ -361,6 +363,8 @@ you rebuild it from memory, and nothing below <b>0.8</b> passes the gate.
       <button id="learnBtn">Learn</button>
       <button id="reviewBtn">Review</button>
       <button id="transcriptBtn">Transcript</button>
+      <button id="receiptBtn" title="Printable session receipt">Receipt</button>
+      <button id="curveBtn" title="Your personal forgetting curves">Curves</button>
       <button id="sendBtn" disabled>Answer</button>
       <span class="kbd-hint">Press / to focus the territory box · Enter sends · Esc closes panels</span>
     </div>
@@ -867,6 +871,116 @@ $("sourceFile").onchange = () => loadSourceFile($("sourceFile").files[0]);
 $("learnBtn").onclick = () => startLearn(box.value.trim());
 $("reviewBtn").onclick = startReview;
 $("transcriptBtn").onclick = downloadTranscript;
+$("receiptBtn").onclick = openReceipt;
+$("curveBtn").onclick = openCurves;
+
+// WS-DEMO PWA: register the service worker if the browser supports it
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
+
+async function openReceipt() {
+  const data = await api("/api/receipt?hours=6");
+  const w = window.open("", "forge-receipt", "width=420,height=720");
+  if (!w) { render("[Forge] popup blocked — allow popups to print the receipt"); return; }
+  w.document.write(receiptHtml(data));
+  w.document.close();
+  setTimeout(() => w.print(), 150);
+}
+
+function receiptHtml(d) {
+  if (d.empty) {
+    return `<!doctype html><meta charset=utf-8><title>Forge receipt</title>
+      <style>body{font-family:ui-monospace,monospace;padding:2em;text-align:center}</style>
+      <p>No session in the last ${d.hours}h. Learn or Review something first.</p>`;
+  }
+  const rows = d.concepts.map(c => `
+    <tr><td>${esc(c.topic)}</td><td>${esc(c.concept)}</td>
+        <td>${c.best_score.toFixed(2)}</td><td>${c.mastered ? "✓" : "✗"}</td>
+        <td>${c.next_due_days > 0 ? "in " + c.next_due_days + "d" : "now"}</td></tr>`).join("");
+  const dt = new Date(d.started_at * 1000).toLocaleString();
+  return `<!doctype html><meta charset=utf-8><title>Forge receipt</title>
+    <style>
+      body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;max-width:360px;margin:1em auto;padding:1em;color:#000;background:#fff}
+      h1{font-size:14px;letter-spacing:.2em;margin:0 0 .3em;text-align:center}
+      hr{border:0;border-top:1px dashed #999;margin:.6em 0}
+      table{width:100%;font-size:11px;border-collapse:collapse}
+      td{padding:.15em .3em;vertical-align:top}
+      .stat{display:flex;justify-content:space-between;font-size:11px}
+      .foot{text-align:center;font-size:10px;margin-top:1em;color:#333}
+      @media print { body { margin:0 } }
+    </style>
+    <h1>⚒ THE FORGE — RECEIPT</h1>
+    <hr>
+    <div class="stat"><span>learner</span><span>${esc(d.learner)}</span></div>
+    <div class="stat"><span>started</span><span>${dt}</span></div>
+    <div class="stat"><span>minutes</span><span>${d.minutes}</span></div>
+    <div class="stat"><span>attempted</span><span>${d.attempted}</span></div>
+    <div class="stat"><span>mastered</span><span>${d.mastered}</span></div>
+    <div class="stat"><span>still trapped</span><span>${d.trapped}</span></div>
+    <hr>
+    <table><thead><tr><th align=left>topic</th><th align=left>concept</th><th>best</th><th>ok</th><th>next</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <hr>
+    <div class="stat"><span>weakest</span><span>${esc(d.weakest.concept)} (${d.weakest.best_score.toFixed(2)})</span></div>
+    <div class="foot">mastery is the only exit — see you next review</div>`;
+}
+
+async function openCurves() {
+  const stats = await api("/api/stats");
+  const attempted = stats.filter(r => r.n_attempts > 0);
+  if (!attempted.length) { render("[Forge] no reviewed concepts yet — do one Learn or Review first"); return; }
+  attempted.sort((a, b) => a.recall - b.recall);  // weakest first
+  const weakest = attempted.slice(0, 5);
+  const list = weakest.map(r => `<li><a href="#" data-t="${esc(r.topic)}" data-c="${esc(r.concept)}">${esc(r.topic)} / ${esc(r.concept)} — recall ${(r.recall * 100).toFixed(0)}%</a></li>`).join("");
+  const drawerHtml = `
+    <div class="drawer-body">
+      <h3>Your weakest 5</h3>
+      <ol id="curveList">${list}</ol>
+      <div id="curveSvgHolder" style="margin-top:1em"></div>
+    </div>`;
+  showDrawer("Forgetting curves", drawerHtml);
+  document.querySelectorAll("#curveList a").forEach(a => {
+    a.onclick = async e => {
+      e.preventDefault();
+      const d = await api(`/api/curve?topic=${encodeURIComponent(a.dataset.t)}&concept=${encodeURIComponent(a.dataset.c)}`);
+      document.getElementById("curveSvgHolder").innerHTML = curveSvg(d);
+    };
+  });
+  // auto-render the weakest one
+  if (weakest[0]) {
+    const d = await api(`/api/curve?topic=${encodeURIComponent(weakest[0].topic)}&concept=${encodeURIComponent(weakest[0].concept)}`);
+    document.getElementById("curveSvgHolder").innerHTML = curveSvg(d);
+  }
+}
+
+function curveSvg(d) {
+  if (!d.points || !d.points.length) return "<p>No data yet for this concept.</p>";
+  const W = 380, H = 160, PAD = 24;
+  const t0 = d.points[0].t, t1 = d.points[d.points.length - 1].t;
+  const xs = t => PAD + (t - t0) / (t1 - t0) * (W - 2 * PAD);
+  const ys = r => H - PAD - r * (H - 2 * PAD);
+  const path = d.points.map((p, i) => (i ? "L" : "M") + xs(p.t).toFixed(1) + " " + ys(p.recall).toFixed(1)).join(" ");
+  const gate = ys(0.8);
+  const resets = d.resets.map(r => `<circle cx="${xs(r.t).toFixed(1)}" cy="${ys(r.score).toFixed(1)}" r="3" fill="#c9a35c"/>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;background:#0c0e13;border:1px solid #232936">
+    <line x1="${PAD}" y1="${gate}" x2="${W - PAD}" y2="${gate}" stroke="#c9a35c" stroke-dasharray="3,3" opacity=".5"/>
+    <text x="${PAD}" y="${gate - 4}" fill="#c9a35c" font-size="9" opacity=".7">0.8 mastery</text>
+    <path d="${path}" fill="none" stroke="#7a85a0" stroke-width="1.5"/>
+    ${resets}
+    <text x="${PAD}" y="${H - 6}" fill="#79839a" font-size="9">${esc(d.topic)} / ${esc(d.concept)} — next due in ${((d.due - Date.now() / 1000) / 86400).toFixed(1)}d</text>
+  </svg>`;
+}
+
+function showDrawer(title, bodyHtml) {
+  const d = document.createElement("aside");
+  d.className = "drawer";
+  d.setAttribute("role", "dialog");
+  d.innerHTML = `<div class="drawer-head"><h2>${esc(title)}</h2>
+    <button class="drawer-close" aria-label="Close">×</button></div>${bodyHtml}`;
+  document.body.appendChild(d);
+  d.querySelector(".drawer-close").onclick = () => d.remove();
+}
 $("settingsBtn").onclick = () => openDrawer("settingsDrawer");
 $("saveSettingsBtn").onclick = () => { saveSettings(); closeDrawer("settingsDrawer"); };
 $("switchLearnerBtn").onclick = async () => {

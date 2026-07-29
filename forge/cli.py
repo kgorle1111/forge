@@ -193,6 +193,39 @@ def cmd_web(args):
     serve(args.port, learner=args.learner)
 
 
+def cmd_receipt(args):
+    """WS-DEMO: plain-text receipt of the most recent session (last N hours)."""
+    d = Memory().session_receipt(hours=args.hours)
+    if getattr(args, "json", False):
+        _json(d)
+        return
+    if d.get("empty"):
+        print(f"[Forge] No session in the last {d['hours']}h.")
+        return
+    from datetime import datetime
+    started = datetime.fromtimestamp(d["started_at"]).strftime("%Y-%m-%d %H:%M")
+    print("=" * 42)
+    print("  THE FORGE — session receipt")
+    print("=" * 42)
+    print(f"  learner:    {d['learner']}")
+    print(f"  started:    {started}")
+    print(f"  minutes:    {d['minutes']}")
+    print(f"  attempted:  {d['attempted']}")
+    print(f"  mastered:   {d['mastered']}")
+    print(f"  trapped:    {d['trapped']}")
+    print("-" * 42)
+    for c in d["concepts"]:
+        mark = "✓" if c["mastered"] else "✗"
+        nxt = f"in {c['next_due_days']}d" if c["next_due_days"] > 0 else "now"
+        print(f"  {mark} {c['topic'][:20]:20} / {c['concept'][:14]:14} "
+              f"{c['best_score']:.2f}  next {nxt}")
+    print("-" * 42)
+    w = d["weakest"]
+    print(f"  weakest:    {w['concept']} ({w['best_score']:.2f})")
+    print("=" * 42)
+    print("  mastery is the only exit — see you next review")
+
+
 def cmd_stats(args):
     m = Memory()
     rows = m.stats()
@@ -1651,6 +1684,10 @@ def main(argv=None):
     web.set_defaults(fn=cmd_web)
     sub.add_parser("stats", parents=[profile]).set_defaults(fn=cmd_stats)
     sub.add_parser("graph", parents=[profile]).set_defaults(fn=cmd_graph)
+    receipt = sub.add_parser("receipt", parents=[profile],
+                             help="print a plain-text receipt of the recent session")
+    receipt.add_argument("--hours", type=float, default=6.0)
+    receipt.set_defaults(fn=cmd_receipt)
     # === WS-EVAL ===
     from .evals import cmd_eval
     ev = sub.add_parser("eval", parents=[profile],

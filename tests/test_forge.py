@@ -2162,6 +2162,97 @@ def test_bp3_emit_chunk_none_byte_identical():
     assert '"concepts"' not in joined and '"questions"' not in joined  # JSON asks never stream
 
 
+# === WS-DEMO ===
+
+def test_demo_session_receipt_shape_and_totals():
+    m = Memory(":memory:")
+    now = time.time()
+    # 2 mastered + 1 trapped in the same "session"
+    m.record("demo topic", "alpha", 1.0, now=now - 300)
+    m.record("demo topic", "beta", 1.0, now=now - 200)
+    m.record("demo topic", "gamma", 0.4, now=now - 100)
+    d = m.session_receipt(hours=1.0)
+    assert not d["empty"]
+    assert d["attempted"] == 3 and d["mastered"] == 2 and d["trapped"] == 1
+    names = {c["concept"] for c in d["concepts"]}
+    assert names == {"alpha", "beta", "gamma"}
+    assert d["weakest"]["concept"] == "gamma"
+
+
+def test_demo_receipt_empty_window():
+    m = Memory(":memory:")
+    m.record("t", "c", 1.0, now=time.time() - 3600 * 48)
+    d = m.session_receipt(hours=1.0)
+    assert d["empty"] is True
+
+
+def test_demo_curve_series_monotone_decay_between_resets():
+    m = Memory(":memory:")
+    now = time.time()
+    m.record("t", "c", 1.0, now=now - 86400 * 5)  # one review 5 days ago
+    d = m.curve_series("t", "c", ahead_days=10)
+    assert d["points"]
+    recalls = [p["recall"] for p in d["points"]]
+    # forgetting is monotone decay after a single review
+    assert all(recalls[i] >= recalls[i + 1] for i in range(len(recalls) - 1))
+    assert d["resets"] and 0.0 <= d["resets"][0]["score"] <= 1.0
+
+
+def test_demo_curve_series_unknown_concept_is_empty():
+    d = Memory(":memory:").curve_series("nope", "none")
+    assert d == {"points": [], "resets": []}
+
+
+def test_demo_pwa_manifest_and_sw_served():
+    from http.server import ThreadingHTTPServer
+    from forge import web
+    os.environ["FORGE_DB"] = os.path.join(tempfile.mkdtemp(), "pwa.db")
+    with _engine_env(FORGE_STUB="1",
+                     FORGE_CONFIG=os.path.join(tempfile.mkdtemp(), "c.json")):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        try:
+            for path, needle in (("/manifest.webmanifest", "The Forge"),
+                                 ("/sw.js", "forge-shell-v1")):
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                conn.request("GET", path)
+                resp = conn.getresponse()
+                body = resp.read().decode()
+                assert resp.status == 200
+                assert needle in body, f"{path} missing {needle}"
+            # dashboard HTML advertises the manifest
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/")
+            assert b"manifest.webmanifest" in conn.getresponse().read()
+        finally:
+            server.shutdown()
+
+
+def test_demo_receipt_api_endpoint():
+    from http.server import ThreadingHTTPServer
+    from forge import web
+    dbfile = os.path.join(tempfile.mkdtemp(), "recv.db")
+    os.environ["FORGE_DB"] = dbfile
+    m = Memory(dbfile)
+    now = time.time()
+    m.record("api topic", "one", 1.0, now=now - 100)
+    m.db.close()
+    with _engine_env(FORGE_STUB="1", FORGE_DB=dbfile,
+                     FORGE_CONFIG=os.path.join(tempfile.mkdtemp(), "c.json")):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/api/receipt?hours=1")
+            body = json.loads(conn.getresponse().read())
+            assert body["attempted"] == 1
+            assert body["concepts"][0]["concept"] == "one"
+        finally:
+            server.shutdown()
+
+
 # === WS-VOICE ===
 
 def test_voice_status_all_present_matrix():

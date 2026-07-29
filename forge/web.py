@@ -68,6 +68,39 @@ class Session:
 SESSION = Session()
 _MODEL = None
 
+# WS-DEMO PWA: minimal installable shell — cache the app HTML only; API calls
+# stay network-only so the browser always sees fresh state (staleness in an
+# active-recall app would be silently wrong data).
+_MANIFEST = json.dumps({
+    "name": "The Forge",
+    "short_name": "Forge",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#0b0e14",
+    "theme_color": "#c9a35c",
+    "description": "Mastery-gated active-recall learning that refuses to let you fool yourself.",
+})
+_SW_JS = """
+const APP_SHELL = "/";
+const CACHE = "forge-shell-v1";
+self.addEventListener("install", e => {
+  e.waitUntil(caches.open(CACHE).then(c => c.add(APP_SHELL)));
+});
+self.addEventListener("activate", e => {
+  e.waitUntil(caches.keys().then(ks =>
+    Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))));
+});
+self.addEventListener("fetch", e => {
+  const url = new URL(e.request.url);
+  // Never cache the API — active-recall data must always be fresh.
+  if (url.pathname.startsWith("/api/")) return;
+  if (e.request.method !== "GET") return;
+  if (url.pathname === "/") {
+    e.respondWith(fetch(e.request).catch(() => caches.match(APP_SHELL)));
+  }
+});
+""".strip()
+
 
 def _model() -> str:
     global _MODEL
@@ -157,6 +190,17 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/setup":
             from .wizard import setup_state
             self._send(setup_state(Memory()))
+        elif self.path == "/manifest.webmanifest":
+            self._send(_MANIFEST, "application/manifest+json")
+        elif self.path == "/sw.js":
+            self._send(_SW_JS, "application/javascript")
+        elif self.path.startswith("/api/receipt"):
+            hours = float(_query_param(self.path, "hours") or 6.0)
+            self._send(Memory().session_receipt(hours=hours))
+        elif self.path.startswith("/api/curve"):
+            topic = _query_param(self.path, "topic")[:200]
+            concept = _query_param(self.path, "concept")[:200]
+            self._send(Memory().curve_series(topic, concept))
         elif self.path == "/api/debt":
             self._send(Memory().review_debt())
         elif self.path == "/api/progress":
