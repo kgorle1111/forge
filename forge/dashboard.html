@@ -590,7 +590,12 @@ async function api(path, body) {
   } : {});
   return r.json();
 }
-function esc(s) { const d = document.createElement("i"); d.textContent = s; return d.innerHTML; }
+function esc(s) {
+  // textContent→innerHTML escapes <, >, & but NOT quotes; add them so esc() is
+  // safe in quoted-attribute contexts too (kills a whole XSS class)
+  const d = document.createElement("i"); d.textContent = s;
+  return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 async function refresh() {
   const [s, graph, fc, rows, due, weak, progress, setup] = await Promise.all([
     api("/api/state"), api("/api/graphdata"), api("/api/forecast"),
@@ -881,8 +886,12 @@ if ("serviceWorker" in navigator) {
 
 async function openReceipt() {
   const data = await api("/api/receipt?hours=6");
+  // "noopener" nulls window.open's return so we couldn't write() to the popup;
+  // instead we get a reference and immediately sever the opener link — same
+  // defense, keeps us able to write the receipt HTML.
   const w = window.open("", "forge-receipt", "width=420,height=720");
   if (!w) { render("[Forge] popup blocked — allow popups to print the receipt"); return; }
+  try { w.opener = null; } catch (_) {}
   w.document.write(receiptHtml(data));
   w.document.close();
   setTimeout(() => w.print(), 150);
@@ -915,7 +924,7 @@ function receiptHtml(d) {
     <div class="stat"><span>learner</span><span>${esc(d.learner)}</span></div>
     <div class="stat"><span>started</span><span>${dt}</span></div>
     <div class="stat"><span>minutes</span><span>${d.minutes}</span></div>
-    <div class="stat"><span>attempted</span><span>${d.attempted}</span></div>
+    <div class="stat"><span>concepts</span><span>${d.concepts_seen}</span></div>
     <div class="stat"><span>mastered</span><span>${d.mastered}</span></div>
     <div class="stat"><span>still trapped</span><span>${d.trapped}</span></div>
     <hr>
