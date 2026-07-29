@@ -1089,7 +1089,7 @@ class Memory:
             "started_at": first_ts,
             "ended_at": last_ts,
             "minutes": round((last_ts - first_ts) / 60, 1),
-            "attempted": len(concepts),
+            "concepts_seen": len(concepts),
             "mastered": sum(1 for c in concepts if c["mastered"]),
             "trapped": sum(1 for c in concepts if not c["mastered"]),
             "concepts": concepts,

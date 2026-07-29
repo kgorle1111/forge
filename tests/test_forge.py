@@ -2173,7 +2173,7 @@ def test_demo_session_receipt_shape_and_totals():
     m.record("demo topic", "gamma", 0.4, now=now - 100)
     d = m.session_receipt(hours=1.0)
     assert not d["empty"]
-    assert d["attempted"] == 3 and d["mastered"] == 2 and d["trapped"] == 1
+    assert d["concepts_seen"] == 3 and d["mastered"] == 2 and d["trapped"] == 1
     names = {c["concept"] for c in d["concepts"]}
     assert names == {"alpha", "beta", "gamma"}
     assert d["weakest"]["concept"] == "gamma"
@@ -2247,7 +2247,7 @@ def test_demo_receipt_api_endpoint():
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             conn.request("GET", "/api/receipt?hours=1")
             body = json.loads(conn.getresponse().read())
-            assert body["attempted"] == 1
+            assert body["concepts_seen"] == 1
             assert body["concepts"][0]["concept"] == "one"
         finally:
             server.shutdown()
@@ -2510,6 +2510,226 @@ def test_docker_forge_bind_default_is_localhost():
             assert server.server_address[0] == "127.0.0.1"
         finally:
             server.server_close()
+
+
+# === C-P3 review-gate fixes ===
+
+def test_cp3_esc_escapes_quotes_too():
+    # security H1: esc() left " and ' unescaped, opening XSS in every
+    # quoted-attribute template (openCurves added two new sinks)
+    import re as _re
+    with open("forge/dashboard.html", encoding="utf-8") as f:
+        src = f.read()
+    m = _re.search(r"function esc\(s\)\s*\{[^}]+\}", src)
+    assert m, "esc() function missing"
+    body = m.group(0)
+    assert '&quot;' in body and '&#39;' in body, "esc() no longer escapes quotes"
+
+
+def test_cp3_doctor_exit_code_survives_all_voice_missing():
+    # ok-shadow regression: cmd_doctor(full=True) with whisper+recorder+model
+    # ALL missing (loop var used to shadow engine-health ok → forced exit 1)
+    import argparse
+    import contextlib
+    import io
+    import forge.voice as voice
+    from forge.cli import cmd_doctor
+    tmp = tempfile.mkdtemp()
+    real_which = voice.shutil.which
+    old_model = os.environ.get("FORGE_WHISPER_MODEL")
+    voice.shutil.which = lambda _n: None
+    os.environ["FORGE_WHISPER_MODEL"] = "/nope/nothing.bin"
+    try:
+        with _engine_env(FORGE_STUB="1",
+                         FORGE_DB=os.path.join(tmp, "d.db"),
+                         FORGE_CONFIG=os.path.join(tmp, "c.json")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                cmd_doctor(argparse.Namespace(fix=False, full=True))  # must NOT SystemExit
+    finally:
+        voice.shutil.which = real_which
+        if old_model is None:
+            os.environ.pop("FORGE_WHISPER_MODEL", None)
+        else:
+            os.environ["FORGE_WHISPER_MODEL"] = old_model
+
+
+def test_cp3_csrf_guard_covers_receipt_and_curve():
+    # security corollary: /api/setup was pinned; receipt & curve inherit the
+    # guard structurally — pin them so a "read-only endpoint" refactor can't
+    # silently shortcircuit
+    from http.server import ThreadingHTTPServer
+    from forge import web
+    os.environ["FORGE_DB"] = os.path.join(tempfile.mkdtemp(), "csrf-c.db")
+    with _engine_env(FORGE_STUB="1",
+                     FORGE_CONFIG=os.path.join(tempfile.mkdtemp(), "c.json")):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        try:
+            for path in ("/api/setup", "/api/receipt",
+                         "/api/curve?topic=t&concept=c"):
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                conn.request("GET", path, headers={"Origin": "https://evil.example"})
+                assert conn.getresponse().status == 403, f"CSRF guard bypassed on {path}"
+        finally:
+            server.shutdown()
+
+
+def test_cp3_curve_http_endpoint_shape():
+    from http.server import ThreadingHTTPServer
+    from forge import web
+    dbfile = os.path.join(tempfile.mkdtemp(), "curve.db")
+    os.environ["FORGE_DB"] = dbfile
+    m = Memory(dbfile)
+    m.record("api t", "api c", 1.0, now=time.time() - 3 * 86400)
+    m.db.close()
+    with _engine_env(FORGE_STUB="1", FORGE_DB=dbfile,
+                     FORGE_CONFIG=os.path.join(tempfile.mkdtemp(), "c.json")):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/api/curve?topic=api%20t&concept=api%20c")
+            body = json.loads(conn.getresponse().read())
+            assert body["topic"] == "api t" and body["concept"] == "api c"
+            assert body["points"] and body["resets"]
+        finally:
+            server.shutdown()
+
+
+def test_cp3_serve_actually_honors_forge_bind():
+    # coverage H4: the previous test only asserted os.environ works. Prove
+    # serve() itself binds where FORGE_BIND says (a hardcoded '127.0.0.1' in
+    # web.py would silently pass the old test).
+    from forge import web
+    real_ths = web.ThreadingHTTPServer
+    captured = {}
+
+    class _Spy:
+        def __init__(self, addr, handler):
+            captured["addr"] = addr
+            self.server_address = addr
+        def serve_forever(self):
+            pass
+        def server_close(self):
+            pass
+    web.ThreadingHTTPServer = _Spy
+    old_bind = os.environ.get("FORGE_BIND")
+    try:
+        os.environ["FORGE_BIND"] = "0.0.0.0"
+        try:
+            web.serve(0)
+        except SystemExit:
+            pass
+        assert captured["addr"][0] == "0.0.0.0"
+        os.environ.pop("FORGE_BIND")
+        captured.clear()
+        try:
+            web.serve(0)
+        except SystemExit:
+            pass
+        assert captured["addr"][0] == "127.0.0.1"  # default stays loopback
+    finally:
+        web.ThreadingHTTPServer = real_ths
+        if old_bind is None:
+            os.environ.pop("FORGE_BIND", None)
+        else:
+            os.environ["FORGE_BIND"] = old_bind
+
+
+def test_cp3_cmd_receipt_tabular_and_json():
+    import argparse
+    import contextlib
+    import io
+    from forge.cli import cmd_receipt
+    dbfile = os.path.join(tempfile.mkdtemp(), "rcpt.db")
+    m = Memory(dbfile)
+    m.record("cli topic", "one", 1.0, now=time.time() - 60)
+    m.record("cli topic", "two", 0.4, now=time.time() - 30)
+    m.db.close()
+    with _engine_env(FORGE_STUB="1", FORGE_DB=dbfile,
+                     FORGE_CONFIG=os.path.join(tempfile.mkdtemp(), "c.json")):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmd_receipt(argparse.Namespace(hours=1.0, json=False, learner=None))
+        out = buf.getvalue()
+        assert "THE FORGE" in out and "concepts:" in out
+        assert "cli topic" in out
+        # --json branch: parseable JSON, weakest present
+        buf2 = io.StringIO()
+        with contextlib.redirect_stdout(buf2):
+            cmd_receipt(argparse.Namespace(hours=1.0, json=True, learner=None))
+        d = json.loads(buf2.getvalue())
+        assert d["concepts_seen"] == 2 and d["weakest"]["concept"] == "two"
+
+
+def test_cp3_language_reaches_review_prompt():
+    # critic finding 1: --language / config.language must reach QUIZ + grade
+    # on the REVIEW path, not just learn (Spanish learner day-1, English
+    # review day-3 was the silent regression)
+    from forge.graph import run_topic, run_review
+    m = Memory(":memory:")
+    # seed a card via a learn session, then flip time forward so it's due
+    run_topic("test topic", ask=lambda _p: "remember alpha beta gamma",
+              emit=lambda *_: None, llm=Stub(), memory=m, language="Spanish")
+
+    grader_cap = _CapturePrompts()
+    grader_cap.name = "ollama"
+    run_review(ask=lambda _p: "remember alpha beta gamma", emit=lambda *_: None,
+               llm=Stub(), grader=grader_cap, memory=m, days=1,
+               language="Spanish")
+    lang_line = "Teach, quiz, and give feedback entirely in Spanish."
+    quiz_prompts = [p for p in grader_cap.prompts if '"questions"' in p]
+    grade_prompts = [p for p in grader_cap.prompts if '"score"' in p]
+    # review path builds quiz via llm, not grader — but any capture of prompts
+    # going through the grader must at least show grade prompts carrying the line
+    assert grade_prompts, "no grade prompts captured on review path"
+    assert all(lang_line in p for p in grade_prompts), \
+        "language line missing from review-path grade prompts"
+
+
+def test_cp3_corrupt_language_line_fails_the_check():
+    # critic finding: no test proves that dropping LANGUAGE_LINE from a prompt
+    # actually FAILS the language check in check_record — safety net had a hole
+    from forge import evals, agents
+    lang_records = [r for r in evals.load_golden() if r.get("language")]
+    assert lang_records, "no golden lang record to test with"
+    rec = lang_records[0]
+    real_line = agents.LANGUAGE_LINE
+    agents.LANGUAGE_LINE = ""
+    try:
+        results = evals.check_record(rec)
+        assert "language" in results, "language check missing on a lang record"
+        assert results["language"][0] is False, \
+            "corrupted LANGUAGE_LINE should fail the language check"
+    finally:
+        agents.LANGUAGE_LINE = real_line
+
+
+def test_cp3_sw_skips_api_and_receipt_has_print_css():
+    # BUILD.md §C6 DoDs claim "print CSS present" and "sw scope limited";
+    # both were unasserted before now
+    from forge import web
+    assert "/api/" in web._SW_JS and "return" in web._SW_JS, \
+        "sw.js no longer skips /api/"
+    with open("forge/dashboard.html", encoding="utf-8") as f:
+        html = f.read()
+    assert "@media print" in html, "receipt lost its print stylesheet"
+
+
+class _CapturePrompts(Stub):
+    """Local helper — the WS-LANG _CapturePrompts lives further up; keep
+    this one scoped to review-path testing so import order doesn't matter."""
+
+    name = "stub"
+
+    def __init__(self):
+        self.prompts: list[str] = []
+
+    def ask(self, prompt, as_json=False):
+        self.prompts.append(prompt)
+        return super().ask(prompt, as_json)
 
 
 if __name__ == "__main__":
