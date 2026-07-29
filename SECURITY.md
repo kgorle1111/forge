@@ -27,6 +27,16 @@ Forge is a local-first tool. Here is exactly what leaves your machine, per engin
   path, your Ollama URL) do appear in the bundled doctor output — review
   before sharing, as the tool itself reminds you.
 
+## Docker networking
+
+The container binds `0.0.0.0` by design (Docker's own network namespace);
+the browser-facing security gate is the Host-header allowlist in
+`forge/web.py` — non-`localhost` Host headers are rejected. Always access
+the container as `http://localhost:8765`, not via the LAN IP; do not
+publish port 8765 to public interfaces. The container also runs as an
+unprivileged user (uid 10001, `USER forge`), so any process escape stays
+non-root inside the namespace.
+
 ## Dashboard
 
 `forge web` binds to `127.0.0.1` only. Every request is checked against a

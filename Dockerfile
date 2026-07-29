@@ -16,4 +16,8 @@ ENV FORGE_DB=/data/forge.db \
     FORGE_BIND=0.0.0.0
 VOLUME /data
 EXPOSE 8765
+# drop root — the container escape surface stays small even if a bug lets the
+# python process do things it shouldn't
+RUN useradd -m -u 10001 forge && mkdir -p /data && chown -R forge:forge /data
+USER forge
 CMD ["forge", "web", "--port", "8765"]
