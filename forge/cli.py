@@ -168,7 +168,8 @@ def cmd_review(args):
                    args.cleanup_dictation, args.readback,
                    voice_mode=getattr(args, "voice", False))
     run_review(ask=ask, emit=emit, limit=args.limit, hard=args.hard,
-               confidence=args.confidence, followup=not args.no_followup)
+               confidence=args.confidence, followup=not args.no_followup,
+               language=getattr(args, "language", None))
 
 
 def cmd_practice(args):
@@ -210,7 +211,7 @@ def cmd_receipt(args):
     print(f"  learner:    {d['learner']}")
     print(f"  started:    {started}")
     print(f"  minutes:    {d['minutes']}")
-    print(f"  attempted:  {d['attempted']}")
+    print(f"  concepts:   {d['concepts_seen']}")
     print(f"  mastered:   {d['mastered']}")
     print(f"  trapped:    {d['trapped']}")
     print("-" * 42)
@@ -1347,6 +1348,8 @@ def main(argv=None):
     add_review_options(review)
     review.add_argument("--limit", type=int, default=None,
                         help="review only the highest-risk N due cards")
+    review.add_argument("--language", metavar="LANG",
+                        help="override config language for this review only")
     review.set_defaults(fn=cmd_review)
     practice = sub.add_parser("practice", parents=[profile])
     add_review_options(practice)

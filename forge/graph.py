@@ -10,7 +10,7 @@ import uuid
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
-from .agents import (QUIZ, _json, evaluator, grade, inquisitor, orchestrator,
+from .agents import (QUIZ, _json, _lang, evaluator, grade, inquisitor, orchestrator,
                      route_after_evaluation, route_after_orchestration,
                      synthesizer)
 from .llm import get_grader, get_llm, stream_or_ask
@@ -97,12 +97,17 @@ def run_topic(topic: str, ask, emit=print, llm=None, memory=None,
 def run_review(ask, emit=print, llm=None, memory=None, grader=None,
                limit: int | None = None, days: int | None = None,
                hard: bool = False, confidence: bool = False,
-               followup: bool = True) -> int:
+               followup: bool = True, language: str | None = None) -> int:
     """Quiz every concept the scheduler says is due; returns count reviewed.
     Shared by the CLI and the web dashboard."""
     memory = memory or Memory()
     grader = grader if grader is not None else (llm or get_grader())
     llm = llm or get_llm()
+    if language is None:
+        from . import config
+        language = config.load().get("language")  # review path defaults to config
+    if language:
+        emit(f"[Forge] language: {language} (experimental)")
     due = memory.due_queue(limit=limit, days=days)
     if not due:
         nxt = memory.db.execute(
@@ -115,7 +120,8 @@ def run_review(ask, emit=print, llm=None, memory=None, grader=None,
     emit(f"[Forge] {len(due)} concept(s) due for review.")
     for card in due:
         lesson = memory.lesson_for(card["topic"], card["concept"])
-        qs = _json(llm.ask(QUIZ.format(name=card["concept"], lesson=lesson),
+        qs = _json(llm.ask(QUIZ.format(name=card["concept"], lesson=lesson)
+                           + _lang(language),
                            as_json=True))["questions"][:2]
         heading = f"\n-- Review: {card['concept']} --" if hard else (
             f"\n-- Review: {card['concept']} ({card['topic']}) --")
@@ -124,10 +130,10 @@ def run_review(ask, emit=print, llm=None, memory=None, grader=None,
         for i, q in enumerate(qs):
             a = ask(f"[{i + 1}/{len(qs)}] {q['prompt']}\n> ")
             conf = _ask_confidence(ask) if confidence else None
-            g = grade(grader, q["prompt"], q["key_points"], a)
+            g = grade(grader, q["prompt"], q["key_points"], a, language=language)
             if followup and 0.0 < g["score"] < 0.8 and g["missed"]:
                 more = ask("Close. Retrieve the missing piece now, without looking.\n> ")
-                g2 = grade(grader, q["prompt"], q["key_points"], f"{a}\n{more}")
+                g2 = grade(grader, q["prompt"], q["key_points"], f"{a}\n{more}", language=language)
                 if g2["score"] > g["score"]:
                     a = f"{a}\n{more}"
                     g = g2
