@@ -38,9 +38,15 @@ def _ask(prompt: str) -> str:
     return input(prompt)
 
 
-def _io(speak: bool, voice: str = "", push_to_talk: bool = False,
-        cleanup: bool = False, readback: bool = False):
-    """(emit, ask) pair; --speak reads lessons and questions aloud on macOS."""
+def _io(speak: bool, say_voice: str = "", push_to_talk: bool = False,
+        cleanup: bool = False, readback: bool = False,
+        voice_mode: bool = False):
+    """(emit, ask) pair; --speak reads lessons and questions aloud on macOS.
+
+    voice_mode wraps ask with push-to-talk whisper STT + confirm gate (see
+    forge/voice.py) — implies speak."""
+    if voice_mode:
+        speak = True
     def say(text):
         if not (speak and sys.platform == "darwin"):
             return
@@ -48,26 +54,42 @@ def _io(speak: bool, voice: str = "", push_to_talk: bool = False,
         if t:
             # ponytail: blocking speech paces the session; async queue if it drags
             cmd = ["say", "-r", "200"]
-            if voice:
-                cmd += ["-v", voice]
+            if say_voice:
+                cmd += ["-v", say_voice]
             subprocess.run(cmd + [t[:900]])
 
     def emit(text=""):
         print(text)
         say(text)
 
-    def ask(prompt):
+    def _typed_ask(prompt):
         say(prompt)
         if push_to_talk:
-            text = _push_to_talk_answer(prompt)
-        else:
-            text = input(prompt)
-        if cleanup:
-            text = cleanup_dictation(text)
-        if readback:
-            print(f"[Forge] Heard: {text}")
-            say(f"Heard: {text}")
-        return text
+            return _push_to_talk_answer(prompt)
+        return input(prompt)
+
+    if voice_mode:
+        from .voice import make_voice_ask
+        base_ask = make_voice_ask(lambda p: (print(p), say(p)),
+                                  lambda t="": (print(t), say(t)))
+
+        def ask(prompt):
+            text = base_ask(prompt)
+            if cleanup:
+                text = cleanup_dictation(text)
+            if readback:
+                print(f"[Forge] Heard: {text}")
+                say(f"Heard: {text}")
+            return text
+    else:
+        def ask(prompt):
+            text = _typed_ask(prompt)
+            if cleanup:
+                text = cleanup_dictation(text)
+            if readback:
+                print(f"[Forge] Heard: {text}")
+                say(f"Heard: {text}")
+            return text
 
     return emit, ask
 
@@ -102,6 +124,11 @@ def _json(data) -> None:
 
 
 def cmd_learn(args):
+    if getattr(args, "voice", False):
+        from .voice import voice_ready
+        ok, msg = voice_ready()
+        if not ok:
+            raise ValueError(msg)
     llm = get_llm()
     print(f"[Forge] model: {llm.model}")
     source = ""
@@ -116,8 +143,9 @@ def cmd_learn(args):
         chunks = sum(len(doc["chunks"]) for doc in manifest["docs"])
         print(f"[Forge] curriculum grounded in {len(docs)} source file(s), "
               f"{chunks} chunk(s), {len(source)} chars")
-    emit, ask = _io(args.speak, args.voice, args.push_to_talk,
-                   args.cleanup_dictation, args.readback)
+    emit, ask = _io(args.speak, args.say_voice, args.push_to_talk,
+                   args.cleanup_dictation, args.readback,
+                   voice_mode=getattr(args, "voice", False))
     language = getattr(args, "language", None) or config.load().get("language")
     if language:
         print(f"[Forge] language: {language} (experimental)")
@@ -131,22 +159,30 @@ def cmd_learn(args):
 
 
 def cmd_review(args):
-    emit, ask = _io(args.speak, args.voice, args.push_to_talk,
-                   args.cleanup_dictation, args.readback)
+    if getattr(args, "voice", False):
+        from .voice import voice_ready
+        ok, msg = voice_ready()
+        if not ok:
+            raise ValueError(msg)
+    emit, ask = _io(args.speak, args.say_voice, args.push_to_talk,
+                   args.cleanup_dictation, args.readback,
+                   voice_mode=getattr(args, "voice", False))
     run_review(ask=ask, emit=emit, limit=args.limit, hard=args.hard,
                confidence=args.confidence, followup=not args.no_followup)
 
 
 def cmd_practice(args):
-    emit, ask = _io(args.speak, args.voice, args.push_to_talk,
-                   args.cleanup_dictation, args.readback)
+    emit, ask = _io(args.speak, args.say_voice, args.push_to_talk,
+                   args.cleanup_dictation, args.readback,
+                   voice_mode=getattr(args, "voice", False))
     run_review(ask=ask, emit=emit, limit=args.limit, hard=args.hard,
                confidence=args.confidence, followup=not args.no_followup)
 
 
 def cmd_cram(args):
-    emit, ask = _io(args.speak, args.voice, args.push_to_talk,
-                   args.cleanup_dictation, args.readback)
+    emit, ask = _io(args.speak, args.say_voice, args.push_to_talk,
+                   args.cleanup_dictation, args.readback,
+                   voice_mode=getattr(args, "voice", False))
     run_review(ask=ask, emit=emit, limit=args.limit, days=args.days,
                hard=args.hard, confidence=args.confidence,
                followup=not args.no_followup)
@@ -346,8 +382,9 @@ def cmd_stuck(args):
 
 
 def cmd_daily5(args):
-    emit, ask = _io(args.speak, args.voice, args.push_to_talk,
-                   args.cleanup_dictation, args.readback)
+    emit, ask = _io(args.speak, args.say_voice, args.push_to_talk,
+                   args.cleanup_dictation, args.readback,
+                   voice_mode=getattr(args, "voice", False))
     run_review(ask=ask, emit=emit, limit=5, hard=args.hard,
                confidence=args.confidence, followup=not args.no_followup)
 
@@ -360,8 +397,9 @@ def cmd_exam(args):
         return
     for r in cards:
         m.due_now(r["topic"], r["concept"])
-    emit, ask = _io(args.speak, args.voice, args.push_to_talk,
-                   args.cleanup_dictation, args.readback)
+    emit, ask = _io(args.speak, args.say_voice, args.push_to_talk,
+                   args.cleanup_dictation, args.readback,
+                   voice_mode=getattr(args, "voice", False))
     run_review(ask=ask, emit=emit, memory=m, limit=len(cards),
                hard=args.hard, confidence=args.confidence,
                followup=not args.no_followup)
@@ -375,8 +413,9 @@ def cmd_weekly(args):
         return
     for r in cards:
         m.due_now(r["topic"], r["concept"])
-    emit, ask = _io(args.speak, args.voice, args.push_to_talk,
-                   args.cleanup_dictation, args.readback)
+    emit, ask = _io(args.speak, args.say_voice, args.push_to_talk,
+                   args.cleanup_dictation, args.readback,
+                   voice_mode=getattr(args, "voice", False))
     run_review(ask=ask, emit=emit, memory=m, limit=len(cards),
                hard=args.hard, confidence=args.confidence,
                followup=not args.no_followup)
@@ -390,8 +429,9 @@ def cmd_sprint(args):
         return
     for c in cards:
         m.due_now(c["topic"], c["concept"])
-    emit, ask = _io(args.speak, args.voice, args.push_to_talk,
-                   args.cleanup_dictation, args.readback)
+    emit, ask = _io(args.speak, args.say_voice, args.push_to_talk,
+                   args.cleanup_dictation, args.readback,
+                   voice_mode=getattr(args, "voice", False))
     run_review(ask=ask, emit=emit, memory=m, limit=len(cards),
                hard=args.hard, confidence=args.confidence,
                followup=not args.no_followup)
@@ -408,8 +448,9 @@ def cmd_drill(args):
     if not cards:
         print("[Forge] No cards match that drill.")
         return
-    emit, ask = _io(args.speak, args.voice, args.push_to_talk,
-                   args.cleanup_dictation, args.readback)
+    emit, ask = _io(args.speak, args.say_voice, args.push_to_talk,
+                   args.cleanup_dictation, args.readback,
+                   voice_mode=getattr(args, "voice", False))
     run_review(ask=ask, emit=emit, memory=m, limit=len(cards),
                hard=args.hard, confidence=args.confidence,
                followup=not args.no_followup)
@@ -926,6 +967,11 @@ def cmd_doctor(args):
     present = "present" if os.path.exists(cfg_path) else "absent"
     print(f"config: {cfg_path} ({present})")
     print(f"pdftotext: {pdf}")
+    if getattr(args, "full", False):
+        from .voice import voice_status
+        for name, ok, msg in voice_status():
+            mark = "ok" if ok else "missing"
+            print(f"voice {name}: {mark} — {msg}")
     if full:
         db_bytes = (os.path.getsize(m.path)
                     if m.path != ":memory:" and os.path.exists(m.path) else 0)
@@ -1175,10 +1221,12 @@ def _tag(text: str) -> str:
 
 def add_review_options(parser):
     parser.add_argument("--speak", action="store_true")
-    parser.add_argument("--voice", default="",
-                        help="macOS say voice name for --speak/readback")
+    parser.add_argument("--voice", dest="voice", action="store_true",
+                        help="voice mode: push-to-talk STT via whisper.cpp with confirm; implies --speak")
+    parser.add_argument("--say-voice", dest="say_voice", default="",
+                        help="macOS `say` voice name for TTS output")
     parser.add_argument("--push-to-talk", action="store_true",
-                        help="use local whisper.cpp when configured; typed fallback otherwise")
+                        help="legacy: whisper via FORGE_DICTATION_WAV; prefer --voice")
     parser.add_argument("--cleanup-dictation", action="store_true",
                         help="remove common filler words before grading")
     parser.add_argument("--readback", action="store_true",
@@ -1246,10 +1294,12 @@ def main(argv=None):
                        help="teach, quiz and grade in this language (experimental: es, hi)")
     learn.add_argument("--speak", action="store_true",
                        help="read lessons and questions aloud (macOS)")
-    learn.add_argument("--voice", default="",
-                       help="macOS say voice name for --speak/readback")
+    learn.add_argument("--voice", dest="voice", action="store_true",
+                       help="voice mode: push-to-talk STT with confirm; implies --speak")
+    learn.add_argument("--say-voice", dest="say_voice", default="",
+                       help="macOS `say` voice name for TTS output")
     learn.add_argument("--push-to-talk", action="store_true",
-                       help="use local whisper.cpp when configured; typed fallback otherwise")
+                       help="legacy: whisper via FORGE_DICTATION_WAV; prefer --voice")
     learn.add_argument("--cleanup-dictation", action="store_true",
                        help="remove common filler words before grading")
     learn.add_argument("--readback", action="store_true",

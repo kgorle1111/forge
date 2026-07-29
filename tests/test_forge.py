@@ -2162,6 +2162,161 @@ def test_bp3_emit_chunk_none_byte_identical():
     assert '"concepts"' not in joined and '"questions"' not in joined  # JSON asks never stream
 
 
+# === WS-VOICE ===
+
+def test_voice_status_all_present_matrix():
+    # detection matrix via mocked shutil.which + fake model file
+    import forge.voice as voice
+    tmp = tempfile.mkdtemp()
+    model = os.path.join(tmp, "ggml-base.en.bin")
+    open(model, "w").close()
+
+    real_which = voice.shutil.which
+    voice.shutil.which = lambda name: {"whisper-cli": "/usr/local/bin/whisper-cli",
+                                       "rec": "/usr/local/bin/rec"}.get(name)
+    old_model = os.environ.get("FORGE_WHISPER_MODEL")
+    os.environ["FORGE_WHISPER_MODEL"] = model
+    try:
+        status = voice.voice_status()
+        assert {s[0] for s in status} == {"whisper", "whisper model", "recorder"}
+        assert all(ok for _, ok, _ in status), status
+        ok, msg = voice.voice_ready()
+        assert ok and msg == "voice ready"
+    finally:
+        voice.shutil.which = real_which
+        if old_model is None:
+            os.environ.pop("FORGE_WHISPER_MODEL", None)
+        else:
+            os.environ["FORGE_WHISPER_MODEL"] = old_model
+
+
+def test_voice_status_missing_each_component_is_prescriptive():
+    import forge.voice as voice
+    real_which = voice.shutil.which
+    old_model = os.environ.get("FORGE_WHISPER_MODEL")
+
+    scenarios = [
+        # whisper missing
+        ({}, os.path.join(tempfile.mkdtemp(), "no_such.bin"),
+         "brew install whisper-cpp"),
+        # recorder missing
+        ({"whisper": "/w"}, _touch_model(),
+         "brew install sox"),
+        # model missing (unknown path)
+        ({"whisper": "/w", "rec": "/r"}, "/definitely/not/here.bin",
+         "download one"),
+    ]
+    try:
+        for whichmap, model_path, needle in scenarios:
+            voice.shutil.which = lambda n, m=whichmap: m.get(n)
+            os.environ["FORGE_WHISPER_MODEL"] = model_path
+            ok, msg = voice.voice_ready()
+            assert not ok, f"expected unready for {whichmap}"
+            assert needle in msg, f"prescriptive text missing: {msg}"
+    finally:
+        voice.shutil.which = real_which
+        if old_model is None:
+            os.environ.pop("FORGE_WHISPER_MODEL", None)
+        else:
+            os.environ["FORGE_WHISPER_MODEL"] = old_model
+
+
+def _touch_model():
+    tmp = tempfile.mkdtemp()
+    p = os.path.join(tmp, "m.bin")
+    open(p, "w").close()
+    return p
+
+
+def test_voice_transcribe_parses_whisper_txt_output():
+    import forge.voice as voice
+    tmp = tempfile.mkdtemp()
+    wav = os.path.join(tmp, "audio.wav")
+    open(wav, "w").close()
+    # whisper's -otxt writes <wav>.txt beside the input
+    with open(wav + ".txt", "w", encoding="utf-8") as f:
+        f.write("  remember alpha beta gamma  \n")
+    model = _touch_model()
+    real_which = voice.shutil.which
+    voice.shutil.which = lambda n: "/fake/whisper-cli" if n == "whisper-cli" else None
+    old_model = os.environ.get("FORGE_WHISPER_MODEL")
+    os.environ["FORGE_WHISPER_MODEL"] = model
+
+    class _P:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+    real_run = voice.subprocess.run
+    voice.subprocess.run = lambda *_a, **_k: _P()
+    try:
+        assert voice._transcribe(wav) == "remember alpha beta gamma"
+        assert not os.path.exists(wav + ".txt")  # cleaned up
+    finally:
+        voice.shutil.which = real_which
+        voice.subprocess.run = real_run
+        if old_model is None:
+            os.environ.pop("FORGE_WHISPER_MODEL", None)
+        else:
+            os.environ["FORGE_WHISPER_MODEL"] = old_model
+
+
+def test_voice_ask_typed_fallback_always_available():
+    # a user who prefers typing must never be forced through the mic path
+    import forge.voice as voice
+    typed = iter(["typed answer\n"])
+    real_input = voice.input if hasattr(voice, "input") else input
+    import builtins
+    real_bi = builtins.input
+    printed = []
+    builtins.input = lambda _p="": next(typed)
+    try:
+        ask = voice.make_voice_ask(
+            base_ask=lambda p: None,
+            base_emit=lambda t="": printed.append(t))
+        assert ask("Q?") == "typed answer\n"
+    finally:
+        builtins.input = real_bi
+
+
+def test_voice_ask_transcript_requires_confirm():
+    # y confirms; anything else re-prompts. NEVER auto-submit a transcript.
+    import forge.voice as voice
+    inputs = iter(["\n",              # blank -> trigger record path
+                   "y",                # after transcript shown -> submit
+                   ])
+    real_bi = None
+    import builtins
+    real_bi = builtins.input
+    builtins.input = lambda _p="": next(inputs)
+    real_rt = voice.record_and_transcribe
+    voice.record_and_transcribe = lambda: "the transcript"
+    printed = []
+    try:
+        ask = voice.make_voice_ask(base_ask=lambda p: None,
+                                   base_emit=lambda t="": printed.append(t))
+        assert ask("Q?") == "the transcript"
+        assert any("heard: the transcript" in t for t in printed)
+    finally:
+        builtins.input = real_bi
+        voice.record_and_transcribe = real_rt
+
+
+def test_voice_learn_preflight_refuses_when_components_missing():
+    # --voice with nothing installed must exit non-zero with prescriptive text,
+    # NOT crash or silently type-fallback (that's the interactive escape hatch)
+    import subprocess
+    tmp = tempfile.mkdtemp()
+    env = {**os.environ, "FORGE_STUB": "1",
+           "FORGE_DB": os.path.join(tmp, "vpre.db"),
+           "FORGE_CONFIG": os.path.join(tmp, "vpre.json"),
+           "PATH": "/nonexistent"}  # no shutil.which will find anything
+    proc = subprocess.run(
+        [".venv/bin/forge", "learn", "test", "--voice", "--max-failures", "1"],
+        input="", text=True, capture_output=True, env=env, timeout=15)
+    assert proc.returncode != 0
+    assert "voice unavailable" in (proc.stdout + proc.stderr).lower()
+
+
 # === WS-LANG ===
 
 def test_lang_none_prompts_unchanged():
