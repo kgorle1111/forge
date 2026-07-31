@@ -26,3 +26,6 @@ dist/
 
 # environment files (only .env.example is tracked)
 .env
+
+# IDE / editor local settings
+.idea/
