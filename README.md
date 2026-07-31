@@ -1,6 +1,10 @@
+<p align="center"><img src="docs/media/logo.png" alt="The Forge" width="220"></p>
+
 # ⚒ The Forge
 
 **An AI/ML-powered learning tool that refuses to let you fool yourself.**
+
+📹 **[Watch the 76-second demo](docs/media/forge-demo.mp4)** — a live model teaches, a garbage answer hits the mastery gate, and the receipt prints.
 
 ## What to build → what this is
 
@@ -117,6 +121,22 @@ Full command reference, daily-practice guide, and troubleshooting:
 [UP-AND-RUNNING/README.md](UP-AND-RUNNING/README.md).
 
 ---
+
+## Gallery
+
+| The mastery gate refuses a lazy answer | Your personal forgetting curves |
+|---|---|
+| ![mastery gate](docs/media/08-mastery-gate-fail.png) | ![curves](docs/media/10-forgetting-curves.png) |
+
+| A lesson streams from a live model | The session receipt |
+|---|---|
+| ![streaming](docs/media/06-lesson-streaming.png) | ![receipt](docs/media/11-session-receipt.png) |
+
+| The eval harness grades the teacher | Teaching in Spanish, live |
+|---|---|
+| ![eval](docs/media/13-eval-harness.png) | ![spanish](docs/media/15-spanish-live.png) |
+
+All 15 screenshots in [docs/media](docs/media).
 
 ## Why it works — the science, honestly applied
 
