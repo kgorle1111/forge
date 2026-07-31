@@ -993,7 +993,7 @@ function curveSvg(d) {
 
 function showDrawer(title, bodyHtml) {
   const d = document.createElement("aside");
-  d.className = "drawer";
+  d.className = "drawer open";  // .open: base .drawer is visibility:hidden + off-screen
   d.setAttribute("role", "dialog");
   d.innerHTML = `<div class="drawer-head"><h2>${esc(title)}</h2>
     <button class="drawer-close" aria-label="Close">×</button></div>${bodyHtml}`;
