@@ -23,3 +23,6 @@ H1-RUNBOOK.md
 
 # build artifacts
 dist/
+
+# environment files (only .env.example is tracked)
+.env
